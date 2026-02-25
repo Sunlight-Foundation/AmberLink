@@ -12,7 +12,8 @@ constexpr int32_t HEAP_HANDLE_OFFSET = 0x40000000;
 enum class ObjType {
     STRING,
     ARRAY,
-    INSTANCE
+    INSTANCE,
+    LIST
 };
 
 struct AmberObject {
@@ -26,6 +27,13 @@ struct ArrayObject : AmberObject {
     ArrayObject(size_t size) {
         type = ObjType::ARRAY;
         data.resize(size, Value()); // Initialize with default Value (INT 0)
+    }
+};
+
+struct ListObject : AmberObject {
+    std::vector<Value> items;
+    ListObject() {
+        type = ObjType::LIST;
     }
 };
 

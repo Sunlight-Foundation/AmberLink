@@ -37,6 +37,13 @@ enum OpCode : uint8_t {
     OP_GET_FIELD      = 0x41, // Operand: Field Index (u32). Pop ref, Push value.
     OP_SET_FIELD      = 0x42, // Operand: Field Index (u32). Pop value, Pop ref.
 
+    // --- Collections (List) ---
+    OP_NEW_LIST       = 0x50, // Push list reference
+    OP_LIST_ADD       = 0x51, // Pop value, Pop list ref, Add value to list
+    OP_LIST_GET       = 0x52, // Pop index, Pop list ref, Push value
+    OP_LIST_SET       = 0x53, // Pop value, Pop index, Pop list ref, Set value
+    OP_LIST_SIZE      = 0x54, // Pop list ref, Push size
+
     // --- Functions & Calls ---
     OP_CALL           = 0x30, // Call function at 4-byte address
     OP_RETURN         = 0x31, // Return from function

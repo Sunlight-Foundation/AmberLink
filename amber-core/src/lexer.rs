@@ -3,7 +3,7 @@
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     Var, Mut, Func, Class, Return, Print,
-    Int, Void, String, Bool, Float, Char, // Types
+    Int, Void, String, Bool, Float, Char, List, // Types
     New,
     If, Else, While, For,
     True, False, // Boolean literals
@@ -84,6 +84,7 @@ impl Lexer {
             "void" => Token::Void,
             "String" => Token::String,
             "bool" => Token::Bool,
+            "List" => Token::List, // New Token
             "true" => Token::True,
             "false" => Token::False,
             "new" => Token::New,

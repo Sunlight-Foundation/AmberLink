@@ -255,6 +255,82 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
                     break;
                 }
 
+                // --- Collections (List) ---
+                case OP_NEW_LIST: {
+                    ListObject* list = new ListObject();
+                    int32_t heap_idx = gc.register_object(list);
+                    vm_stack.push_back(Value::make_obj(heap_idx));
+                    break;
+                }
+                case OP_LIST_ADD: {
+                    if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LIST_ADD.");
+                    Value val = vm_stack.back(); vm_stack.pop_back();
+                    Value ref = vm_stack.back(); vm_stack.pop_back();
+
+                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    int32_t heap_idx = ref.as.obj_ref;
+
+                    if (heap_idx < 0 || heap_idx >= gc.objects.size()) throw std::runtime_error("Invalid list reference.");
+                    ListObject* list = dynamic_cast<ListObject*>(gc.objects[heap_idx]);
+                    if (!list) throw std::runtime_error("Reference is not a list.");
+
+                    list->items.push_back(val);
+                    break;
+                }
+                case OP_LIST_GET: {
+                    if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LIST_GET.");
+                    Value idx_val = vm_stack.back(); vm_stack.pop_back();
+                    Value ref = vm_stack.back(); vm_stack.pop_back();
+
+                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    if (idx_val.type != ValueType::INT) throw std::runtime_error("List index must be an integer.");
+
+                    int32_t heap_idx = ref.as.obj_ref;
+                    int32_t idx = idx_val.as.i;
+
+                    if (heap_idx < 0 || heap_idx >= gc.objects.size()) throw std::runtime_error("Invalid list reference.");
+                    ListObject* list = dynamic_cast<ListObject*>(gc.objects[heap_idx]);
+                    if (!list) throw std::runtime_error("Reference is not a list.");
+                    if (idx < 0 || idx >= list->items.size()) throw std::runtime_error("List index out of bounds.");
+
+                    vm_stack.push_back(list->items[idx]);
+                    break;
+                }
+                case OP_LIST_SET: {
+                    if (vm_stack.size() < 3) throw std::runtime_error("Stack underflow during LIST_SET.");
+                    Value val = vm_stack.back(); vm_stack.pop_back();
+                    Value idx_val = vm_stack.back(); vm_stack.pop_back();
+                    Value ref = vm_stack.back(); vm_stack.pop_back();
+
+                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    if (idx_val.type != ValueType::INT) throw std::runtime_error("List index must be an integer.");
+
+                    int32_t heap_idx = ref.as.obj_ref;
+                    int32_t idx = idx_val.as.i;
+
+                    if (heap_idx < 0 || heap_idx >= gc.objects.size()) throw std::runtime_error("Invalid list reference.");
+                    ListObject* list = dynamic_cast<ListObject*>(gc.objects[heap_idx]);
+                    if (!list) throw std::runtime_error("Reference is not a list.");
+                    if (idx < 0 || idx >= list->items.size()) throw std::runtime_error("List index out of bounds.");
+
+                    list->items[idx] = val;
+                    break;
+                }
+                case OP_LIST_SIZE: {
+                    if (vm_stack.empty()) throw std::runtime_error("Stack underflow during LIST_SIZE.");
+                    Value ref = vm_stack.back(); vm_stack.pop_back();
+
+                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    int32_t heap_idx = ref.as.obj_ref;
+
+                    if (heap_idx < 0 || heap_idx >= gc.objects.size()) throw std::runtime_error("Invalid list reference.");
+                    ListObject* list = dynamic_cast<ListObject*>(gc.objects[heap_idx]);
+                    if (!list) throw std::runtime_error("Reference is not a list.");
+
+                    vm_stack.push_back(Value((int32_t)list->items.size()));
+                    break;
+                }
+
                 // --- Arithmetic & Logic ---
                 case OP_ADD: {
                     if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during ADD.");

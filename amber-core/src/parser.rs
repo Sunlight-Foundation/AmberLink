@@ -35,7 +35,7 @@ impl Parser {
     fn parse_statement(&mut self, symbols: &mut SymbolTable) -> Stmt {
         match self.peek() {
             Token::Var => self.parse_declaration(None),
-            Token::Int | Token::Void | Token::String | Token::Bool | Token::Float | Token::Char => {
+            Token::Int | Token::Void | Token::String | Token::Bool | Token::Float | Token::Char | Token::List => {
                 // Lookahead to distinguish Variable Declaration vs Function Definition
                 // int x = 5;       (Type -> Identifier -> Equals)
                 // int x() { ... }  (Type -> Identifier -> LParen)
@@ -67,9 +67,28 @@ impl Parser {
                         Expr::Variable(name) => Stmt::Assign(name, value),
                         Expr::ArrayAccess(name, index) => Stmt::ArraySet(name, *index, value),
                         Expr::GetField(obj, field) => Stmt::FieldSet(obj, field, value),
+                        // Handle List Set: list.set(index, value) or list[index] = value
+                        // If list[index] parses to ArrayAccess, we might need to check type or just use ArraySet opcode which might work if we overload it.
+                        // But for now, let's assume list[index] = value uses ArraySet logic which maps to StoreArray.
+                        // If we want specific ListSet, we need to distinguish.
+                        // For simplicity, let's use method syntax for lists: list.set(i, v)
                         _ => panic!("Invalid assignment target. Only variables, array elements, and fields can be assigned."),
                     }
                 } else {
+                    // Check if it's a ListAdd statement (which is an expression used as statement)
+                    if let Expr::MethodCall(obj, method, args) = &expr {
+                        if method == "add" && args.len() == 1 {
+                             // Convert to Stmt::ListAdd
+                             let stmt = Stmt::ListAdd(obj.clone(), args[0].clone());
+                             self.consume_semicolon();
+                             return stmt;
+                        } else if method == "set" && args.len() == 2 {
+                             let stmt = Stmt::ListSet(obj.clone(), Box::new(args[0].clone()), args[1].clone());
+                             self.consume_semicolon();
+                             return stmt;
+                        }
+                    }
+
                     self.consume_semicolon(); // Consume ;
                     Stmt::Expression(expr)
                 }
@@ -90,6 +109,7 @@ impl Parser {
             Token::Char => Type::Char,
             Token::String => Type::String,
             Token::Void => Type::Void,
+            Token::List => Type::List,
             Token::Identifier(name) => Type::Class(name),
             // TODO: Array types like int[]
             t => panic!("Expected type, found {:?}", t),
@@ -161,7 +181,7 @@ impl Parser {
                 expr
             },
             Token::New => {
-                // new int[size] OR new MyClass()
+                // new int[size] OR new MyClass() OR new List()
                 let type_token = self.advance();
                 match type_token {
                     Token::Int | Token::String | Token::Bool | Token::Float | Token::Char => {
@@ -169,6 +189,11 @@ impl Parser {
                         let size = self.parse_expr();
                         if self.advance() != Token::RBracket { panic!("Expected ']' after size"); }
                         Expr::NewArray(Box::new(size))
+                    },
+                    Token::List => {
+                        if self.advance() != Token::LParen { panic!("Expected '(' after List"); }
+                        if self.advance() != Token::RParen { panic!("Expected ')' after List"); }
+                        Expr::NewList
                     },
                     Token::Identifier(name) => {
                         if self.advance() != Token::LParen { panic!("Expected '(' after class name"); }
@@ -221,7 +246,15 @@ impl Parser {
                             }
                         }
                         if self.advance() != Token::RParen { panic!("Expected ')' after arguments"); }
-                        Expr::MethodCall(Box::new(Expr::Variable(name)), member, args)
+
+                        // Intercept List methods here
+                        if member == "get" && args.len() == 1 {
+                            Expr::ListGet(Box::new(Expr::Variable(name)), Box::new(args[0].clone()))
+                        } else if member == "size" && args.len() == 0 {
+                            Expr::ListSize(Box::new(Expr::Variable(name)))
+                        } else {
+                            Expr::MethodCall(Box::new(Expr::Variable(name)), member, args)
+                        }
                     } else {
                         Expr::GetField(Box::new(Expr::Variable(name)), member)
                     }

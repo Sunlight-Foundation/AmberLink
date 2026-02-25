@@ -16,7 +16,7 @@ This phase moves beyond simple numbers and introduces the ability to manage more
 - [x] **GC Root Scanning:** Fully implement the Garbage Collector by teaching it to scan the VM's stack and global variables for "roots" to determine which objects are still in use.
 - [x] **Arrays:** Introduce a built-in array/list type as the first user-creatable, heap-allocated collection.
 - [x] **Basic Types:** Expand fundamental types to include `float`/`double`, `boolean`/`bool`, `char`.
-- [ ] **Collections:** Introduce built-in collection types (List, Map, Set) in the standard library. (Target: v0.5.0)
+- [x] **Collections:** Introduce built-in collection types (List, Map, Set) in the standard library.
 
 ## Phase 3: Object-Oriented Programming (The "Modern" Milestone)
 This phase brings Amberlink closer to its goal of being a modern, Java-like language.

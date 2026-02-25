@@ -17,6 +17,7 @@ pub enum Type {
     String,
     Void,
     Class(String),
+    List, // New Type
 }
 
 #[derive(Debug, Clone)]
@@ -28,12 +29,16 @@ pub enum Expr {
     StringLiteral(String),
     Variable(String),
     NewArray(Box<Expr>), // Size
+    NewList, // New List
     ArrayAccess(String, Box<Expr>), // Name, Index
     Call(String, Vec<Expr>),
     MethodCall(Box<Expr>, String, Vec<Expr>), // Object, Method Name, Args
     NewInstance(String, Vec<Expr>), // Class Name, Args
     GetField(Box<Expr>, String), // Object Expr, Field Name
     Binary(Box<Expr>, Op, Box<Expr>),
+    // List Operations
+    ListGet(Box<Expr>, Box<Expr>), // List Expr, Index
+    ListSize(Box<Expr>), // List Expr
 }
 
 #[derive(Debug, Clone)]
@@ -50,4 +55,7 @@ pub enum Stmt {
     Function(String, Vec<(String, Type)>, Vec<Stmt>), // Name, Params, Body
     Class(String, Vec<(String, Type)>, Vec<Stmt>), // Name, Fields, Methods
     FieldSet(Box<Expr>, String, Expr), // Object, Field Name, Value
+    // List Operations
+    ListAdd(Box<Expr>, Expr), // List Expr, Value
+    ListSet(Box<Expr>, Box<Expr>, Expr), // List Expr, Index, Value
 }

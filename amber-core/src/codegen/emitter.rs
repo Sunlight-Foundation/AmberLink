@@ -58,6 +58,18 @@ impl Emitter {
                 self.emit_expr(size, symbols);
                 self.emit_byte(OpCode::NewArray.into());
             }
+            Expr::NewList => {
+                self.emit_byte(OpCode::NewList.into());
+            }
+            Expr::ListGet(list_expr, index_expr) => {
+                self.emit_expr(list_expr, symbols);
+                self.emit_expr(index_expr, symbols);
+                self.emit_byte(OpCode::ListGet.into());
+            }
+            Expr::ListSize(list_expr) => {
+                self.emit_expr(list_expr, symbols);
+                self.emit_byte(OpCode::ListSize.into());
+            }
             Expr::NewInstance(class_name, args) => {
                  // 1. Find the class
                 let class_info = symbols.classes.get(class_name)
@@ -255,6 +267,17 @@ impl Emitter {
                 self.emit_expr(index, symbols);
                 self.emit_expr(value, symbols);
                 self.emit_byte(OpCode::StoreArray.into());
+            }
+            Stmt::ListAdd(list_expr, value_expr) => {
+                self.emit_expr(list_expr, symbols);
+                self.emit_expr(value_expr, symbols);
+                self.emit_byte(OpCode::ListAdd.into());
+            }
+            Stmt::ListSet(list_expr, index_expr, value_expr) => {
+                self.emit_expr(list_expr, symbols);
+                self.emit_expr(index_expr, symbols);
+                self.emit_expr(value_expr, symbols);
+                self.emit_byte(OpCode::ListSet.into());
             }
             Stmt::Return(expr) => {
                 self.emit_expr(expr, symbols);

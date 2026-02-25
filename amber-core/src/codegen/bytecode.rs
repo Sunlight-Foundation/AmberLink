@@ -36,6 +36,13 @@ pub enum OpCode {
     GetField = 0x41,
     SetField = 0x42,
 
+    // --- Collections (List) ---
+    NewList = 0x50,
+    ListAdd = 0x51,
+    ListGet = 0x52,
+    ListSet = 0x53,
+    ListSize = 0x54,
+
     // --- Functions & Calls ---
     Call = 0x30,
     Return = 0x31,

@@ -48,6 +48,16 @@ void Heap::mark(AmberObject* obj, size_t constant_pool_size) {
                 }
             }
         }
+    } else if (obj->type == ObjType::LIST) {
+        ListObject* list = static_cast<ListObject*>(obj);
+        for (const Value& val : list->items) {
+            if (val.type == ValueType::OBJ_REF) {
+                size_t heap_idx = val.as.obj_ref;
+                if (heap_idx < objects.size()) {
+                    mark(objects[heap_idx], constant_pool_size);
+                }
+            }
+        }
     }
 }
 
