@@ -3,12 +3,16 @@
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     Var, Mut, Func, Class, Return, Print,
-    Int, Void, String, New, // Types & Keywords
-    If, Else, While,
+    Int, Void, String, Bool, Float, Char, // Types
+    New,
+    If, Else, While, For,
+    True, False, // Boolean literals
     Identifier(String),
     Number(i64),
+    FloatLit(String), // Keep as string to parse later or f64
+    CharLit(char),
     StringLit(String),
-    Equals, Plus, Minus, Star, Slash, Comma, Dot, LessThan,
+    Equals, Plus, Minus, Star, Slash, Comma, Dot, LessThan, Semicolon,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Newline,
     EOF,
@@ -47,12 +51,14 @@ impl Lexer {
                 '<' => { tokens.push(Token::LessThan); self.pos += 1; }
                 '.' => { tokens.push(Token::Dot); self.pos += 1; }
                 ',' => { tokens.push(Token::Comma); self.pos += 1; }
+                ';' => { tokens.push(Token::Semicolon); self.pos += 1; }
                 '(' => { tokens.push(Token::LParen); self.pos += 1; }
                 ')' => { tokens.push(Token::RParen); self.pos += 1; }
                 '{' => { tokens.push(Token::LBrace); self.pos += 1; }
                 '}' => { tokens.push(Token::RBrace); self.pos += 1; }
                 '[' => { tokens.push(Token::LBracket); self.pos += 1; }
                 ']' => { tokens.push(Token::RBracket); self.pos += 1; }
+                '\'' => tokens.push(self.read_char()),
                 'a'..='z' | 'A'..='Z' | '_' => tokens.push(self.read_identifier()),
                 '0'..='9' => tokens.push(self.read_number()),
                 '"' => tokens.push(self.read_string()),
@@ -72,8 +78,13 @@ impl Lexer {
         match text.as_str() {
             "var" => Token::Var,
             "int" => Token::Int,
+            "float" => Token::Float,
+            "char" => Token::Char,
             "void" => Token::Void,
             "String" => Token::String,
+            "bool" => Token::Bool,
+            "true" => Token::True,
+            "false" => Token::False,
             "new" => Token::New,
             "mut" => Token::Mut,
             "func" => Token::Func,
@@ -83,17 +94,40 @@ impl Lexer {
             "if" => Token::If,
             "else" => Token::Else,
             "while" => Token::While,
+            "for" => Token::For,
             _ => Token::Identifier(text),
         }
     }
 
     fn read_number(&mut self) -> Token {
         let start = self.pos;
-        while self.pos < self.input.len() && self.input[self.pos].is_digit(10) {
-            self.pos += 1;
+        let mut is_float = false;
+
+        while self.pos < self.input.len() {
+            let c = self.input[self.pos];
+            if c.is_digit(10) {
+                self.pos += 1;
+            } else if c == '.' && !is_float {
+                // Check if next char is digit to avoid confusion with method call or property access (though usually space separates, but 1.toString() is valid in some langs)
+                // In this simple lexer, we assume 1.2 is float. 1.method is not supported yet or requires lookahead.
+                // Let's assume if we see dot followed by digit, it's float.
+                if self.pos + 1 < self.input.len() && self.input[self.pos + 1].is_digit(10) {
+                    is_float = true;
+                    self.pos += 1;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
         }
+
         let text: String = self.input[start..self.pos].iter().collect();
-        Token::Number(text.parse().unwrap())
+        if is_float {
+            Token::FloatLit(text)
+        } else {
+            Token::Number(text.parse().unwrap())
+        }
     }
 
     fn read_string(&mut self) -> Token {
@@ -105,5 +139,21 @@ impl Lexer {
         let text: String = self.input[start..self.pos].iter().collect();
         if self.pos < self.input.len() { self.pos += 1; } // Skip closing quote
         Token::StringLit(text)
+    }
+
+    fn read_char(&mut self) -> Token {
+        self.pos += 1; // Skip opening quote
+        if self.pos >= self.input.len() { return Token::EOF; }
+
+        let c = self.input[self.pos];
+        self.pos += 1;
+
+        if self.pos < self.input.len() && self.input[self.pos] == '\'' {
+            self.pos += 1; // Skip closing quote
+            Token::CharLit(c)
+        } else {
+            // Error or malformed char
+            Token::CharLit(c)
+        }
     }
 }
