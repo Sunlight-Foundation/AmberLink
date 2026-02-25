@@ -15,7 +15,7 @@ This phase moves beyond simple numbers and introduces the ability to manage more
 - [x] **String & Constant Pool:** Implement heap-allocated strings and a "constant pool" in the bytecode to efficiently store and reuse literals.
 - [x] **GC Root Scanning:** Fully implement the Garbage Collector by teaching it to scan the VM's stack and global variables for "roots" to determine which objects are still in use.
 - [x] **Arrays:** Introduce a built-in array/list type as the first user-creatable, heap-allocated collection.
-- [ ] **Basic Types:** Expand fundamental types to include `float`/`double`, `boolean`/`bool`, `char`. (Target: v0.5.0)
+- [x] **Basic Types:** Expand fundamental types to include `float`/`double`, `boolean`/`bool`, `char`.
 - [ ] **Collections:** Introduce built-in collection types (List, Map, Set) in the standard library. (Target: v0.5.0)
 
 ## Phase 3: Object-Oriented Programming (The "Modern" Milestone)

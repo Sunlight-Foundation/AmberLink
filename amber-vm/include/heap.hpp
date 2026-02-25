@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstddef>
+#include "value.hpp"
 
 // Offset to distinguish Heap Objects from Constant Pool indices in negative handles
 constexpr int32_t HEAP_HANDLE_OFFSET = 0x40000000;
@@ -21,19 +22,19 @@ struct AmberObject {
 };
 
 struct ArrayObject : AmberObject {
-    std::vector<int32_t> data;
+    std::vector<Value> data;
     ArrayObject(size_t size) {
         type = ObjType::ARRAY;
-        data.resize(size, 0);
+        data.resize(size, Value()); // Initialize with default Value (INT 0)
     }
 };
 
 struct InstanceObject : AmberObject {
     uint32_t class_id;
-    std::vector<int32_t> fields;
+    std::vector<Value> fields;
     InstanceObject(uint32_t cls_id, size_t field_count) : class_id(cls_id) {
         type = ObjType::INSTANCE;
-        fields.resize(field_count, 0);
+        fields.resize(field_count, Value());
     }
 };
 
@@ -44,7 +45,7 @@ public:
     ~Heap();
     int32_t register_object(AmberObject* obj);
     void mark(AmberObject* obj, size_t constant_pool_size);
-    void collect(const std::vector<int32_t>& stack, const std::vector<int32_t>& globals, size_t constant_pool_size);
+    void collect(const std::vector<Value>& stack, const std::vector<Value>& globals, size_t constant_pool_size);
     void sweep();
 };
 

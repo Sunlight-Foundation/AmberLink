@@ -12,7 +12,7 @@ pub enum Token {
     FloatLit(String), // Keep as string to parse later or f64
     CharLit(char),
     StringLit(String),
-    Equals, Plus, Minus, Star, Slash, Comma, Dot, LessThan, Semicolon,
+    Equals, Plus, Minus, Star, Slash, Comma, Dot, LessThan, GreaterThan, Semicolon,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Newline,
     EOF,
@@ -49,6 +49,7 @@ impl Lexer {
                     }
                 }
                 '<' => { tokens.push(Token::LessThan); self.pos += 1; }
+                '>' => { tokens.push(Token::GreaterThan); self.pos += 1; }
                 '.' => { tokens.push(Token::Dot); self.pos += 1; }
                 ',' => { tokens.push(Token::Comma); self.pos += 1; }
                 ';' => { tokens.push(Token::Semicolon); self.pos += 1; }

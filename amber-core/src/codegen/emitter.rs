@@ -20,6 +20,9 @@ impl Emitter {
     pub fn emit_int(&mut self, val: i32) {
         self.code.extend_from_slice(&val.to_le_bytes());
     }
+    pub fn emit_float(&mut self, val: f32) {
+        self.code.extend_from_slice(&val.to_le_bytes());
+    }
 
     pub fn emit_expr(&mut self, expr: &Expr, symbols: &mut SymbolTable) {
         match expr {
@@ -28,22 +31,16 @@ impl Emitter {
                 self.emit_int(*val);
             }
             Expr::Float(val) => {
-                // TODO: Add OpCode::PushFloat or handle floats properly
-                // For now, casting to int or panicking might be temporary behavior
-                // But to fix compilation, we need to handle this variant.
-                // Let's assume we treat it as int for now or add a TODO.
-                // Ideally, we should add OpCode::PushFloat.
-                // Since I cannot modify bytecode.rs easily without seeing it, I will cast to int for now to unblock.
-                self.emit_byte(OpCode::Push.into());
-                self.emit_int(*val as i32);
+                self.emit_byte(OpCode::PushFloat.into());
+                self.emit_float(*val as f32); // Cast f64 to f32 for now as VM expects 4 bytes
             }
             Expr::Char(val) => {
-                self.emit_byte(OpCode::Push.into());
-                self.emit_int(*val as i32);
+                self.emit_byte(OpCode::PushChar.into());
+                self.emit_int(*val as i32); // UTF-32
             }
             Expr::Boolean(val) => {
-                self.emit_byte(OpCode::Push.into());
-                self.emit_int(if *val { 1 } else { 0 });
+                self.emit_byte(OpCode::PushBool.into());
+                self.emit_byte(if *val { 1 } else { 0 });
             }
             Expr::StringLiteral(s) => {
                 // Deduplicate or just push
@@ -175,6 +172,7 @@ impl Emitter {
                     Op::Mul => self.emit_byte(OpCode::Mul.into()),
                     Op::Div => self.emit_byte(OpCode::Div.into()),
                     Op::LessThan => self.emit_byte(OpCode::Less.into()),
+                    Op::GreaterThan => self.emit_byte(OpCode::Greater.into()),
                 }
             }
         }

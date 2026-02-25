@@ -19,10 +19,17 @@ impl Parser {
             match self.peek() {
                 // Skip empty lines between top-level statements
                 Token::Newline => { self.advance(); }
+                Token::Semicolon => { self.advance(); }
                 _ => statements.push(self.parse_statement(symbols)),
             }
         }
         statements
+    }
+
+    fn consume_semicolon(&mut self) {
+        if self.peek() == Token::Semicolon {
+            self.advance();
+        }
     }
 
     fn parse_statement(&mut self, symbols: &mut SymbolTable) -> Stmt {
@@ -55,6 +62,7 @@ impl Parser {
                 if self.peek() == Token::Equals {
                     self.advance(); // consume '='
                     let value = self.parse_expr();
+                    self.consume_semicolon(); // Consume ;
                     match expr {
                         Expr::Variable(name) => Stmt::Assign(name, value),
                         Expr::ArrayAccess(name, index) => Stmt::ArraySet(name, *index, value),
@@ -62,10 +70,15 @@ impl Parser {
                         _ => panic!("Invalid assignment target. Only variables, array elements, and fields can be assigned."),
                     }
                 } else {
+                    self.consume_semicolon(); // Consume ;
                     Stmt::Expression(expr)
                 }
             }
-            _ => Stmt::Expression(self.parse_expr()),
+            _ => {
+                let expr = self.parse_expr();
+                self.consume_semicolon(); // Consume ;
+                Stmt::Expression(expr)
+            }
         }
     }
 
@@ -91,10 +104,14 @@ impl Parser {
 
     fn parse_comparison(&mut self) -> Expr {
         let mut expr = self.parse_term();
-        while matches!(self.peek(), Token::LessThan) {
-            self.advance(); // consume '<'
+        while matches!(self.peek(), Token::LessThan | Token::GreaterThan) {
+            let op = match self.advance() {
+                Token::LessThan => Op::LessThan,
+                Token::GreaterThan => Op::GreaterThan,
+                _ => unreachable!(),
+            };
             let right = self.parse_term();
-            expr = Expr::Binary(Box::new(expr), Op::LessThan, Box::new(right));
+            expr = Expr::Binary(Box::new(expr), op, Box::new(right));
         }
         expr
     }
@@ -136,6 +153,13 @@ impl Parser {
             Token::CharLit(val) => Expr::Char(val),
             Token::True => Expr::Boolean(true),
             Token::False => Expr::Boolean(false),
+            Token::LParen => {
+                let expr = self.parse_expr();
+                if self.advance() != Token::RParen {
+                    panic!("Expected ')' after expression");
+                }
+                expr
+            },
             Token::New => {
                 // new int[size] OR new MyClass()
                 let type_token = self.advance();
@@ -287,6 +311,7 @@ impl Parser {
                 // Parse field
                 let field_type = self.parse_type();
                 let field_name = match self.advance() { Token::Identifier(n) => n, _ => panic!("Expected field name") };
+                self.consume_semicolon(); // Consume ; after field decl
                 fields.push((field_name, field_type));
             }
         }
@@ -367,6 +392,7 @@ impl Parser {
         if self.advance() != Token::Equals { panic!("Expected '=' after variable name"); }
         
         let initializer = self.parse_expr();
+        self.consume_semicolon(); // Consume ;
         Stmt::VarDecl(name, explicit_type, initializer)
     }
 
@@ -499,12 +525,14 @@ impl Parser {
     fn parse_return(&mut self) -> Stmt {
         self.advance(); // skip 'return'
         let value = self.parse_expr();
+        self.consume_semicolon(); // Consume ;
         Stmt::Return(value)
     }
 
     fn parse_print(&mut self) -> Stmt {
         self.advance(); // skip 'print'
         let expr = self.parse_expr();
+        self.consume_semicolon(); // Consume ;
         Stmt::Print(expr)
     }
 

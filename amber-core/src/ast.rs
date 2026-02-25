@@ -5,6 +5,7 @@ pub enum Op {
     Mul,
     Div,
     LessThan,
+    GreaterThan,
 }
 
 #[derive(Debug, Clone, PartialEq)]
