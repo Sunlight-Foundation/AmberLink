@@ -1,46 +1,65 @@
-# Amberlink
+# Amberlink 🔶
 
-The alternative to Java Programming
+A Java alternative that doesn't hate you.
 
-Amberlink is a high-performance, multi-paradigm programming language designed to bridge the gap between the safety of Java and the raw power of C++. It utilizes a unique Dual-Backend approach, allowing code to run either on a dedicated Virtual Machine (AVM) or as a native binary.
+Amberlink is a statically typed, multi-paradigm language built to give Java developers a cleaner home. Same familiar structure — classes, interfaces, strong typing — without the ceremony. Run on the Amber Virtual Machine or compile to a native binary. Your choice.
 
-## 🚀 Features
+> **Status: Dormant — 2.0 revival in planning. Watch this repo for updates.**
 
-*   **Familiar Syntax:** Uses C-style static typing and function definitions to feel intuitive for developers coming from Java, C++, or C#.
-*   **Script-like Simplicity:** No mandatory classes or `public static void main` boilerplate. Code executes from top to bottom.
-*   **Memory Management:** Features a lean Mark-and-Sweep Garbage Collector.
-*   **Dual-Backend:** Runs on the Amber Virtual Machine (AVM) for safety or compiles to native binaries for speed (planned).
+---
 
-## 🛠️ Build and Run
+## Why Amberlink?
 
-Amberlink uses a Python script as a unified interface for building the toolchain and compiling user code.
+Java is fine. We just think it can be better.
 
-### Prerequisites
-Ensure you have the following installed:
-*   Rust (Cargo)
-*   C++ Compiler (CMake)
-*   Python 3
+- No `public static void main` — code runs top to bottom
+- No primitive vs object split — `int` is `int`, everywhere
+- Null safety built in from the start
+- Dual-backend: AVM for managed execution, native for raw speed
+- Mark-and-Sweep GC with developer hinting (no surprises)
 
-### Quick Start
+---
 
-1.  **Initialize the Toolchain:**
-    Compiles `amber-core` (Rust) and `amber-vm` (C++) and places binaries in `bin/`.
-    ```bash
-    python scripts/Amberlink.py init
-    ```
+## Build and Run
 
-2.  **Build Code:**
-    Compiles an `.amb` file to `.amc` bytecode.
-    ```bash
-    python scripts/Amberlink.py build main.amb
-    ```
+**Prerequisites**
+- Rust (Cargo)
+- C++ Compiler (CMake)
+- Python 3
 
-3.  **Run Bytecode:**
-    Execute the compiled file using the VM.
-    ```bash
-    ./bin/avm output.amc
-    ```
+**Quick Start**
 
-## 🗺️ Roadmap
+Initialize the toolchain:
 
-Check out roadmap.md for the detailed development plan.
+```bash
+python scripts/Amberlink.py init
+```
+
+Compile your code:
+```bash
+python scripts/Amberlink.py build main.amb
+```
+
+Run it:
+```bash
+./bin/avm output.amc        # Linux/macOS
+.\bin\avm.exe output.amc    # Windows
+```
+
+---
+
+## What's Coming in 2.0
+
+- Full OOP — classes, interfaces, inheritance
+- Exception handling
+- Generics
+- Native backend (amber-native)
+- IntelliJ and VS Code support via LSP
+
+---
+
+## License
+
+MIT — do what you want, just don't be weird about it.
+
+*Part of the [Sunlight Foundation](https://github.com/Sunlight-Foundation)*
