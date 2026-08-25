@@ -9,474 +9,602 @@
 #include <cstdint>
 #include <cstring> // For std::memcpy
 
+// Threaded dispatch via computed gotos (GCC/Clang only).
+// MSVC does not support computed gotos — falls back to switch.
+// Opcode enum values are sparse so we use a 256-entry table with a
+// catch-all default for unknown opcodes.
+#if defined(__GNUC__) || defined(__clang__)
+    #define USE_COMPUTED_GOTO
+#endif
+
 void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& constants) {
     if (bytecode.empty()) {
         std::cout << "AVM Warning: No bytecode to execute." << std::endl;
-        return; // Nothing to execute
+        return;
     }
 
-    // Use vector for cache locality (contiguous memory) instead of std::stack/deque
     std::vector<Value> vm_stack;
-    vm_stack.reserve(1024); // Pre-allocate reasonable stack space
+    vm_stack.reserve(1024);
 
-    // Garbage Collector
     Heap gc;
-
-    // Global variables storage
     std::vector<Value> globals;
-
-    // Call Stack (Stores return addresses)
     std::vector<const uint8_t*> call_stack;
-    
-    // Frame Pointer Stack (Stores previous frame pointers)
     std::vector<size_t> fp_stack;
-    size_t fp = 0; // Current Frame Pointer
+    size_t fp = 0;
 
     const uint8_t* ip = bytecode.data();
     const uint8_t* end = ip + bytecode.size();
 
     try {
+#ifdef USE_COMPUTED_GOTO
+        // 256-entry dispatch table — unused slots point to lbl_UNKNOWN.
+        static const void* dispatch_table[256];
+        static bool table_init = false;
+        if (!table_init) {
+            for (int i = 0; i < 256; i++) dispatch_table[i] = &&lbl_UNKNOWN;
+            dispatch_table[OP_HALT]           = &&lbl_OP_HALT;
+            dispatch_table[OP_JUMP]           = &&lbl_OP_JUMP;
+            dispatch_table[OP_JUMP_IF_FALSE]  = &&lbl_OP_JUMP_IF_FALSE;
+            dispatch_table[OP_PUSH]           = &&lbl_OP_PUSH;
+            dispatch_table[OP_PUSH_FLOAT]     = &&lbl_OP_PUSH_FLOAT;
+            dispatch_table[OP_PUSH_BOOL]      = &&lbl_OP_PUSH_BOOL;
+            dispatch_table[OP_PUSH_CHAR]      = &&lbl_OP_PUSH_CHAR;
+            dispatch_table[OP_LOAD_CONST]     = &&lbl_OP_LOAD_CONST;
+            dispatch_table[OP_STORE_GLOBAL]   = &&lbl_OP_STORE_GLOBAL;
+            dispatch_table[OP_LOAD_GLOBAL]    = &&lbl_OP_LOAD_GLOBAL;
+            dispatch_table[OP_STORE_LOCAL]    = &&lbl_OP_STORE_LOCAL;
+            dispatch_table[OP_LOAD_LOCAL]     = &&lbl_OP_LOAD_LOCAL;
+            dispatch_table[OP_NEW_ARRAY]      = &&lbl_OP_NEW_ARRAY;
+            dispatch_table[OP_STORE_ARRAY]    = &&lbl_OP_STORE_ARRAY;
+            dispatch_table[OP_LOAD_ARRAY]     = &&lbl_OP_LOAD_ARRAY;
+            dispatch_table[OP_ADD]            = &&lbl_OP_ADD;
+            dispatch_table[OP_SUB]            = &&lbl_OP_SUB;
+            dispatch_table[OP_MUL]            = &&lbl_OP_MUL;
+            dispatch_table[OP_DIV]            = &&lbl_OP_DIV;
+            dispatch_table[OP_LESS]           = &&lbl_OP_LESS;
+            dispatch_table[OP_GREATER]        = &&lbl_OP_GREATER;
+            dispatch_table[OP_NEW_INSTANCE]   = &&lbl_OP_NEW_INSTANCE;
+            dispatch_table[OP_GET_FIELD]      = &&lbl_OP_GET_FIELD;
+            dispatch_table[OP_SET_FIELD]      = &&lbl_OP_SET_FIELD;
+            dispatch_table[OP_NEW_LIST]       = &&lbl_OP_NEW_LIST;
+            dispatch_table[OP_LIST_ADD]       = &&lbl_OP_LIST_ADD;
+            dispatch_table[OP_LIST_GET]       = &&lbl_OP_LIST_GET;
+            dispatch_table[OP_LIST_SET]       = &&lbl_OP_LIST_SET;
+            dispatch_table[OP_LIST_SIZE]      = &&lbl_OP_LIST_SIZE;
+            dispatch_table[OP_CALL]           = &&lbl_OP_CALL;
+            dispatch_table[OP_RETURN]         = &&lbl_OP_RETURN;
+            dispatch_table[OP_POP]            = &&lbl_OP_POP;
+            dispatch_table[OP_PRINT]          = &&lbl_OP_PRINT;
+            table_init = true;
+        }
+
+        #define DISPATCH() if (ip < end) goto *dispatch_table[*ip++]; else goto lbl_OP_HALT
+        DISPATCH();
+
+        lbl_OP_HALT:
+            return;
+
+        lbl_OP_JUMP: {
+            int32_t offset; std::memcpy(&offset, ip, 4); ip += 4; ip += offset;
+            DISPATCH();
+        }
+        lbl_OP_JUMP_IF_FALSE: {
+            int32_t offset; std::memcpy(&offset, ip, 4); ip += 4;
+            if (vm_stack.empty()) throw std::runtime_error("Stack underflow during JUMP_IF_FALSE.");
+            Value condition = vm_stack.back(); vm_stack.pop_back();
+            bool is_false = false;
+            if (condition.type == ValueType::BOOL) is_false = !condition.as.b;
+            else if (condition.type == ValueType::INT) is_false = (condition.as.i == 0);
+            else throw std::runtime_error("JUMP_IF_FALSE requires a boolean or integer condition.");
+            if (is_false) ip += offset;
+            DISPATCH();
+        }
+        lbl_OP_PUSH: {
+            int32_t value; std::memcpy(&value, ip, 4); ip += 4;
+            vm_stack.push_back(Value(value));
+            DISPATCH();
+        }
+        lbl_OP_PUSH_FLOAT: {
+            float value; std::memcpy(&value, ip, 4); ip += 4;
+            vm_stack.push_back(Value(value));
+            DISPATCH();
+        }
+        lbl_OP_PUSH_BOOL: {
+            vm_stack.push_back(Value(*ip++ != 0));
+            DISPATCH();
+        }
+        lbl_OP_PUSH_CHAR: {
+            int32_t value; std::memcpy(&value, ip, 4); ip += 4;
+            vm_stack.push_back(Value((char)value));
+            DISPATCH();
+        }
+        lbl_OP_LOAD_CONST: {
+            int32_t index; std::memcpy(&index, ip, 4); ip += 4;
+            vm_stack.push_back(Value::make_string(index));
+            DISPATCH();
+        }
+        lbl_OP_STORE_GLOBAL: {
+            int32_t index; std::memcpy(&index, ip, 4); ip += 4;
+            if (vm_stack.empty()) throw std::runtime_error("Stack underflow during STORE.");
+            Value val = vm_stack.back(); vm_stack.pop_back();
+            if (index >= (int32_t)globals.size()) globals.resize(index + 1);
+            globals[index] = val;
+            DISPATCH();
+        }
+        lbl_OP_LOAD_GLOBAL: {
+            int32_t index; std::memcpy(&index, ip, 4); ip += 4;
+            if (index < 0 || index >= (int32_t)globals.size()) throw std::runtime_error("Global variable index out of bounds.");
+            vm_stack.push_back(globals[index]);
+            DISPATCH();
+        }
+        lbl_OP_STORE_LOCAL: {
+            int32_t index; std::memcpy(&index, ip, 4); ip += 4;
+            if (vm_stack.empty()) throw std::runtime_error("Stack underflow during STORE_LOCAL.");
+            Value val = vm_stack.back(); vm_stack.pop_back();
+            if (fp + index >= vm_stack.size()) vm_stack.resize(fp + index + 1);
+            vm_stack[fp + index] = val;
+            DISPATCH();
+        }
+        lbl_OP_LOAD_LOCAL: {
+            int32_t index; std::memcpy(&index, ip, 4); ip += 4;
+            vm_stack.push_back(vm_stack[fp + index]);
+            DISPATCH();
+        }
+        lbl_OP_NEW_ARRAY: {
+            if (vm_stack.empty()) throw std::runtime_error("Stack underflow during NEW_ARRAY.");
+            Value size_val = vm_stack.back(); vm_stack.pop_back();
+            if (size_val.type != ValueType::INT) throw std::runtime_error("Array size must be an integer.");
+            ArrayObject* arr = new ArrayObject(size_val.as.i);
+            vm_stack.push_back(Value::make_obj(gc.register_object(arr)));
+            DISPATCH();
+        }
+        lbl_OP_STORE_ARRAY: {
+            if (vm_stack.size() < 3) throw std::runtime_error("Stack underflow during STORE_ARRAY.");
+            Value val = vm_stack.back(); vm_stack.pop_back();
+            Value idx_val = vm_stack.back(); vm_stack.pop_back();
+            Value ref = vm_stack.back(); vm_stack.pop_back();
+            if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+            if (idx_val.type != ValueType::INT) throw std::runtime_error("Array index must be an integer.");
+            ArrayObject* arr = dynamic_cast<ArrayObject*>(gc.objects[ref.as.obj_ref]);
+            if (!arr) throw std::runtime_error("Reference is not an array.");
+            if (idx_val.as.i < 0 || idx_val.as.i >= (int32_t)arr->data.size()) throw std::runtime_error("Array index out of bounds.");
+            arr->data[idx_val.as.i] = val;
+            DISPATCH();
+        }
+        lbl_OP_LOAD_ARRAY: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LOAD_ARRAY.");
+            Value idx_val = vm_stack.back(); vm_stack.pop_back();
+            Value ref = vm_stack.back(); vm_stack.pop_back();
+            if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+            if (idx_val.type != ValueType::INT) throw std::runtime_error("Array index must be an integer.");
+            ArrayObject* arr = dynamic_cast<ArrayObject*>(gc.objects[ref.as.obj_ref]);
+            if (!arr) throw std::runtime_error("Reference is not an array.");
+            if (idx_val.as.i < 0 || idx_val.as.i >= (int32_t)arr->data.size()) throw std::runtime_error("Array index out of bounds.");
+            vm_stack.push_back(arr->data[idx_val.as.i]);
+            DISPATCH();
+        }
+        lbl_OP_ADD: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during ADD.");
+            Value b = vm_stack.back(); vm_stack.pop_back();
+            Value a = vm_stack.back(); vm_stack.pop_back();
+            if (a.type == ValueType::INT && b.type == ValueType::INT) {
+                vm_stack.push_back(Value(a.as.i + b.as.i));
+            } else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) {
+                vm_stack.push_back(Value(a.as.f + b.as.f));
+            } else if (a.type == ValueType::STRING_CONST && b.type == ValueType::STRING_CONST) {
+                constants.push_back(constants[a.as.str_idx] + constants[b.as.str_idx]);
+                gc.collect(vm_stack, globals, constants.size());
+                vm_stack.push_back(Value::make_string(constants.size() - 1));
+            } else {
+                throw std::runtime_error("Type mismatch: Cannot add incompatible types.");
+            }
+            DISPATCH();
+        }
+        lbl_OP_SUB: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during SUB.");
+            Value b = vm_stack.back(); vm_stack.pop_back();
+            Value a = vm_stack.back(); vm_stack.pop_back();
+            if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i - b.as.i));
+            else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f - b.as.f));
+            else throw std::runtime_error("Type mismatch: Cannot subtract incompatible types.");
+            DISPATCH();
+        }
+        lbl_OP_MUL: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during MUL.");
+            Value b = vm_stack.back(); vm_stack.pop_back();
+            Value a = vm_stack.back(); vm_stack.pop_back();
+            if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i * b.as.i));
+            else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f * b.as.f));
+            else throw std::runtime_error("Type mismatch: Cannot multiply incompatible types.");
+            DISPATCH();
+        }
+        lbl_OP_DIV: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during DIV.");
+            Value b = vm_stack.back(); vm_stack.pop_back();
+            Value a = vm_stack.back(); vm_stack.pop_back();
+            if (a.type == ValueType::INT && b.type == ValueType::INT) {
+                if (b.as.i == 0) throw std::runtime_error("Division by zero.");
+                vm_stack.push_back(Value(a.as.i / b.as.i));
+            } else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) {
+                if (b.as.f == 0.0f) throw std::runtime_error("Division by zero.");
+                vm_stack.push_back(Value(a.as.f / b.as.f));
+            } else throw std::runtime_error("Type mismatch: Cannot divide incompatible types.");
+            DISPATCH();
+        }
+        lbl_OP_LESS: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LESS.");
+            Value b = vm_stack.back(); vm_stack.pop_back();
+            Value a = vm_stack.back(); vm_stack.pop_back();
+            if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i < b.as.i));
+            else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f < b.as.f));
+            else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c < b.as.c));
+            else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with LESS.");
+            DISPATCH();
+        }
+        lbl_OP_GREATER: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during GREATER.");
+            Value b = vm_stack.back(); vm_stack.pop_back();
+            Value a = vm_stack.back(); vm_stack.pop_back();
+            if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i > b.as.i));
+            else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f > b.as.f));
+            else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c > b.as.c));
+            else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with GREATER.");
+            DISPATCH();
+        }
+        lbl_OP_NEW_INSTANCE: {
+            int32_t class_name_idx; std::memcpy(&class_name_idx, ip, 4); ip += 4;
+            int32_t field_count; std::memcpy(&field_count, ip, 4); ip += 4;
+            InstanceObject* obj = new InstanceObject(class_name_idx, field_count);
+            vm_stack.push_back(Value::make_obj(gc.register_object(obj)));
+            DISPATCH();
+        }
+        lbl_OP_GET_FIELD: {
+            int32_t field_idx; std::memcpy(&field_idx, ip, 4); ip += 4;
+            if (vm_stack.empty()) throw std::runtime_error("Stack underflow during GET_FIELD.");
+            Value ref = vm_stack.back(); vm_stack.pop_back();
+            if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+            InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[ref.as.obj_ref]);
+            if (!obj) throw std::runtime_error("Reference is not an instance.");
+            if (field_idx < 0 || field_idx >= (int32_t)obj->fields.size()) throw std::runtime_error("Field index out of bounds.");
+            vm_stack.push_back(obj->fields[field_idx]);
+            DISPATCH();
+        }
+        lbl_OP_SET_FIELD: {
+            int32_t field_idx; std::memcpy(&field_idx, ip, 4); ip += 4;
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during SET_FIELD.");
+            Value val = vm_stack.back(); vm_stack.pop_back();
+            Value ref = vm_stack.back(); vm_stack.pop_back();
+            if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+            InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[ref.as.obj_ref]);
+            if (!obj) throw std::runtime_error("Reference is not an instance.");
+            if (field_idx < 0 || field_idx >= (int32_t)obj->fields.size()) throw std::runtime_error("Field index out of bounds.");
+            obj->fields[field_idx] = val;
+            DISPATCH();
+        }
+        lbl_OP_NEW_LIST: {
+            ListObject* list = new ListObject();
+            vm_stack.push_back(Value::make_obj(gc.register_object(list)));
+            DISPATCH();
+        }
+        lbl_OP_LIST_ADD: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LIST_ADD.");
+            Value val = vm_stack.back(); vm_stack.pop_back();
+            Value ref = vm_stack.back(); vm_stack.pop_back();
+            if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+            ListObject* list = dynamic_cast<ListObject*>(gc.objects[ref.as.obj_ref]);
+            if (!list) throw std::runtime_error("Reference is not a list.");
+            list->items.push_back(val);
+            DISPATCH();
+        }
+        lbl_OP_LIST_GET: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LIST_GET.");
+            Value idx_val = vm_stack.back(); vm_stack.pop_back();
+            Value ref = vm_stack.back(); vm_stack.pop_back();
+            if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+            if (idx_val.type != ValueType::INT) throw std::runtime_error("List index must be an integer.");
+            ListObject* list = dynamic_cast<ListObject*>(gc.objects[ref.as.obj_ref]);
+            if (!list) throw std::runtime_error("Reference is not a list.");
+            if (idx_val.as.i < 0 || idx_val.as.i >= (int32_t)list->items.size()) throw std::runtime_error("List index out of bounds.");
+            vm_stack.push_back(list->items[idx_val.as.i]);
+            DISPATCH();
+        }
+        lbl_OP_LIST_SET: {
+            if (vm_stack.size() < 3) throw std::runtime_error("Stack underflow during LIST_SET.");
+            Value val = vm_stack.back(); vm_stack.pop_back();
+            Value idx_val = vm_stack.back(); vm_stack.pop_back();
+            Value ref = vm_stack.back(); vm_stack.pop_back();
+            if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+            if (idx_val.type != ValueType::INT) throw std::runtime_error("List index must be an integer.");
+            ListObject* list = dynamic_cast<ListObject*>(gc.objects[ref.as.obj_ref]);
+            if (!list) throw std::runtime_error("Reference is not a list.");
+            if (idx_val.as.i < 0 || idx_val.as.i >= (int32_t)list->items.size()) throw std::runtime_error("List index out of bounds.");
+            list->items[idx_val.as.i] = val;
+            DISPATCH();
+        }
+        lbl_OP_LIST_SIZE: {
+            if (vm_stack.empty()) throw std::runtime_error("Stack underflow during LIST_SIZE.");
+            Value ref = vm_stack.back(); vm_stack.pop_back();
+            if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+            ListObject* list = dynamic_cast<ListObject*>(gc.objects[ref.as.obj_ref]);
+            if (!list) throw std::runtime_error("Reference is not a list.");
+            vm_stack.push_back(Value((int32_t)list->items.size()));
+            DISPATCH();
+        }
+        lbl_OP_CALL: {
+            int32_t target_offset; std::memcpy(&target_offset, ip, 4); ip += 4;
+            uint8_t arg_count = *ip++;
+            if (vm_stack.size() < arg_count) throw std::runtime_error("Stack underflow during CALL.");
+            fp_stack.push_back(fp);
+            fp = vm_stack.size() - arg_count;
+            call_stack.push_back(ip);
+            ip = bytecode.data() + target_offset;
+            DISPATCH();
+        }
+        lbl_OP_RETURN: {
+            if (call_stack.empty()) throw std::runtime_error("RETURN with empty call stack.");
+            Value result = vm_stack.back(); vm_stack.pop_back();
+            vm_stack.resize(fp);
+            vm_stack.push_back(result);
+            ip = call_stack.back(); call_stack.pop_back();
+            fp = fp_stack.back(); fp_stack.pop_back();
+            DISPATCH();
+        }
+        lbl_OP_POP:
+            vm_stack.pop_back();
+            DISPATCH();
+        lbl_OP_PRINT: {
+            if (vm_stack.empty()) throw std::runtime_error("Stack underflow during PRINT.");
+            Value val = vm_stack.back(); vm_stack.pop_back();
+            if (val.type == ValueType::STRING_CONST) {
+                size_t idx = val.as.str_idx;
+                if (idx < constants.size()) std::cout << constants[idx] << std::endl;
+                else std::cout << "<Invalid String Index>" << std::endl;
+            } else {
+                std::cout << val << std::endl;
+            }
+            DISPATCH();
+        }
+        lbl_UNKNOWN:
+            throw std::runtime_error("Unknown opcode encountered.");
+
+#else
+        // --- Fallback switch dispatch (MSVC) ---
         while (ip < end) {
             uint8_t instruction = *ip++;
             switch (instruction) {
-                // --- Control Flow ---
-                case OP_HALT: {
-                    return; // End execution
-                }
+                case OP_HALT: return;
                 case OP_JUMP: {
-                    int32_t offset;
-                    std::memcpy(&offset, ip, sizeof(int32_t));
-                    ip += 4;      // Consume the 4-byte offset from the instruction stream
-                    ip += offset; // Apply the relative jump
-                    break;
+                    int32_t offset; std::memcpy(&offset, ip, 4); ip += 4; ip += offset; break;
                 }
                 case OP_JUMP_IF_FALSE: {
-                    int32_t offset;
-                    std::memcpy(&offset, ip, sizeof(int32_t));
-                    ip += 4; // Advance past the offset bytes
-
+                    int32_t offset; std::memcpy(&offset, ip, 4); ip += 4;
                     if (vm_stack.empty()) throw std::runtime_error("Stack underflow during JUMP_IF_FALSE.");
                     Value condition = vm_stack.back(); vm_stack.pop_back();
-                    
                     bool is_false = false;
-                    if (condition.type == ValueType::BOOL) {
-                        is_false = !condition.as.b;
-                    } else if (condition.type == ValueType::INT) {
-                        is_false = (condition.as.i == 0);
-                    } else {
-                        throw std::runtime_error("JUMP_IF_FALSE requires a boolean or integer condition.");
-                    }
-
-                    if (is_false) {
-                        ip += offset;
-                    }
+                    if (condition.type == ValueType::BOOL) is_false = !condition.as.b;
+                    else if (condition.type == ValueType::INT) is_false = (condition.as.i == 0);
+                    else throw std::runtime_error("JUMP_IF_FALSE requires a boolean or integer condition.");
+                    if (is_false) ip += offset;
                     break;
                 }
-
-                // --- Constants & Variables ---
                 case OP_PUSH: {
-                    int32_t value;
-                    std::memcpy(&value, ip, sizeof(int32_t));
-                    vm_stack.push_back(Value(value));
-                    ip += sizeof(int32_t);
-                    break;
+                    int32_t value; std::memcpy(&value, ip, 4); ip += 4;
+                    vm_stack.push_back(Value(value)); break;
                 }
                 case OP_PUSH_FLOAT: {
-                    float value;
-                    std::memcpy(&value, ip, sizeof(float));
-                    vm_stack.push_back(Value(value));
-                    ip += sizeof(float);
-                    break;
+                    float value; std::memcpy(&value, ip, 4); ip += 4;
+                    vm_stack.push_back(Value(value)); break;
                 }
-                case OP_PUSH_BOOL: {
-                    uint8_t value = *ip++;
-                    vm_stack.push_back(Value(value != 0));
-                    break;
-                }
+                case OP_PUSH_BOOL: { vm_stack.push_back(Value(*ip++ != 0)); break; }
                 case OP_PUSH_CHAR: {
-                    int32_t value; // UTF-32 char
-                    std::memcpy(&value, ip, sizeof(int32_t));
-                    vm_stack.push_back(Value((char)value)); // Cast to char for now
-                    ip += sizeof(int32_t);
-                    break;
+                    int32_t value; std::memcpy(&value, ip, 4); ip += 4;
+                    vm_stack.push_back(Value((char)value)); break;
                 }
                 case OP_LOAD_CONST: {
-                    int32_t index;
-                    std::memcpy(&index, ip, sizeof(int32_t));
-                    ip += sizeof(int32_t);
-                    vm_stack.push_back(Value::make_string(index));
-                    break;
+                    int32_t index; std::memcpy(&index, ip, 4); ip += 4;
+                    vm_stack.push_back(Value::make_string(index)); break;
                 }
                 case OP_STORE_GLOBAL: {
-                    int32_t index;
-                    std::memcpy(&index, ip, sizeof(int32_t));
-                    ip += sizeof(int32_t);
-
+                    int32_t index; std::memcpy(&index, ip, 4); ip += 4;
                     if (vm_stack.empty()) throw std::runtime_error("Stack underflow during STORE.");
-                    Value val = vm_stack.back();
-                    vm_stack.pop_back();
-
-                    if (index >= globals.size()) globals.resize(index + 1);
-                    globals[index] = val;
-                    break;
+                    Value val = vm_stack.back(); vm_stack.pop_back();
+                    if (index >= (int32_t)globals.size()) globals.resize(index + 1);
+                    globals[index] = val; break;
                 }
                 case OP_LOAD_GLOBAL: {
-                    int32_t index;
-                    std::memcpy(&index, ip, sizeof(int32_t));
-                    ip += sizeof(int32_t);
-
-                    if (index < 0 || index >= globals.size()) throw std::runtime_error("Global variable index out of bounds.");
-                    vm_stack.push_back(globals[index]);
-                    break;
+                    int32_t index; std::memcpy(&index, ip, 4); ip += 4;
+                    if (index < 0 || index >= (int32_t)globals.size()) throw std::runtime_error("Global variable index out of bounds.");
+                    vm_stack.push_back(globals[index]); break;
+                }
+                case OP_STORE_LOCAL: {
+                    int32_t index; std::memcpy(&index, ip, 4); ip += 4;
+                    if (vm_stack.empty()) throw std::runtime_error("Stack underflow during STORE_LOCAL.");
+                    Value val = vm_stack.back(); vm_stack.pop_back();
+                    if (fp + index >= vm_stack.size()) vm_stack.resize(fp + index + 1);
+                    vm_stack[fp + index] = val; break;
+                }
+                case OP_LOAD_LOCAL: {
+                    int32_t index; std::memcpy(&index, ip, 4); ip += 4;
+                    vm_stack.push_back(vm_stack[fp + index]); break;
                 }
                 case OP_NEW_ARRAY: {
                     if (vm_stack.empty()) throw std::runtime_error("Stack underflow during NEW_ARRAY.");
                     Value size_val = vm_stack.back(); vm_stack.pop_back();
-                    
                     if (size_val.type != ValueType::INT) throw std::runtime_error("Array size must be an integer.");
-                    int32_t size = size_val.as.i;
-
-                    ArrayObject* arr = new ArrayObject(size);
-                    int32_t heap_idx = gc.register_object(arr);
-                    
-                    vm_stack.push_back(Value::make_obj(heap_idx));
-                    break;
+                    ArrayObject* arr = new ArrayObject(size_val.as.i);
+                    vm_stack.push_back(Value::make_obj(gc.register_object(arr))); break;
                 }
                 case OP_STORE_ARRAY: {
                     if (vm_stack.size() < 3) throw std::runtime_error("Stack underflow during STORE_ARRAY.");
                     Value val = vm_stack.back(); vm_stack.pop_back();
                     Value idx_val = vm_stack.back(); vm_stack.pop_back();
                     Value ref = vm_stack.back(); vm_stack.pop_back();
-
                     if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
-                    if (idx_val.type != ValueType::INT) throw std::runtime_error("Array index must be an integer.");
-
-                    int32_t heap_idx = ref.as.obj_ref;
-                    int32_t idx = idx_val.as.i;
-                    
-                    if (heap_idx < 0 || heap_idx >= gc.objects.size()) throw std::runtime_error("Invalid array reference.");
-                    ArrayObject* arr = dynamic_cast<ArrayObject*>(gc.objects[heap_idx]);
+                    ArrayObject* arr = dynamic_cast<ArrayObject*>(gc.objects[ref.as.obj_ref]);
                     if (!arr) throw std::runtime_error("Reference is not an array.");
-                    if (idx < 0 || idx >= arr->data.size()) throw std::runtime_error("Array index out of bounds.");
-                    
-                    arr->data[idx] = val;
-                    break;
+                    arr->data[idx_val.as.i] = val; break;
                 }
                 case OP_LOAD_ARRAY: {
                     if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LOAD_ARRAY.");
                     Value idx_val = vm_stack.back(); vm_stack.pop_back();
                     Value ref = vm_stack.back(); vm_stack.pop_back();
-
                     if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
-                    if (idx_val.type != ValueType::INT) throw std::runtime_error("Array index must be an integer.");
-
-                    int32_t heap_idx = ref.as.obj_ref;
-                    int32_t idx = idx_val.as.i;
-                    
-                    if (heap_idx < 0 || heap_idx >= gc.objects.size()) throw std::runtime_error("Invalid array reference.");
-                    ArrayObject* arr = dynamic_cast<ArrayObject*>(gc.objects[heap_idx]);
+                    ArrayObject* arr = dynamic_cast<ArrayObject*>(gc.objects[ref.as.obj_ref]);
                     if (!arr) throw std::runtime_error("Reference is not an array.");
-                    if (idx < 0 || idx >= arr->data.size()) throw std::runtime_error("Array index out of bounds.");
-                    
-                    vm_stack.push_back(arr->data[idx]);
-                    break;
+                    vm_stack.push_back(arr->data[idx_val.as.i]); break;
                 }
-                case OP_STORE_LOCAL: {
-                    int32_t index;
-                    std::memcpy(&index, ip, sizeof(int32_t));
-                    ip += sizeof(int32_t);
-
-                    if (vm_stack.empty()) throw std::runtime_error("Stack underflow during STORE_LOCAL.");
-                    Value val = vm_stack.back();
-                    vm_stack.pop_back();
-                    
-                    if (fp + index >= vm_stack.size()) vm_stack.resize(fp + index + 1);
-                    vm_stack[fp + index] = val;
-                    break;
-                }
-                case OP_LOAD_LOCAL: {
-                    int32_t index;
-                    std::memcpy(&index, ip, sizeof(int32_t));
-                    ip += sizeof(int32_t);
-                    vm_stack.push_back(vm_stack[fp + index]);
-                    break;
-                }
-                
-                // --- Object-Oriented ---
-                case OP_NEW_INSTANCE: {
-                    int32_t class_name_idx;
-                    std::memcpy(&class_name_idx, ip, sizeof(int32_t)); ip += 4;
-                    int32_t field_count;
-                    std::memcpy(&field_count, ip, sizeof(int32_t)); ip += 4;
-
-                    InstanceObject* obj = new InstanceObject(class_name_idx, field_count);
-                    int32_t heap_idx = gc.register_object(obj);
-                    
-                    vm_stack.push_back(Value::make_obj(heap_idx));
-                    break;
-                }
-                case OP_GET_FIELD: {
-                    int32_t field_idx;
-                    std::memcpy(&field_idx, ip, sizeof(int32_t)); ip += 4;
-
-                    if (vm_stack.empty()) throw std::runtime_error("Stack underflow during GET_FIELD.");
-                    Value ref = vm_stack.back(); vm_stack.pop_back();
-
-                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
-                    int32_t heap_idx = ref.as.obj_ref;
-
-                    if (heap_idx < 0 || heap_idx >= gc.objects.size()) throw std::runtime_error("Invalid instance reference.");
-                    
-                    InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[heap_idx]);
-                    if (!obj) throw std::runtime_error("Reference is not an instance.");
-                    if (field_idx < 0 || field_idx >= obj->fields.size()) throw std::runtime_error("Field index out of bounds.");
-
-                    vm_stack.push_back(obj->fields[field_idx]);
-                    break;
-                }
-                case OP_SET_FIELD: {
-                    int32_t field_idx;
-                    std::memcpy(&field_idx, ip, sizeof(int32_t)); ip += 4;
-
-                    if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during SET_FIELD.");
-                    Value val = vm_stack.back(); vm_stack.pop_back();
-                    Value ref = vm_stack.back(); vm_stack.pop_back();
-
-                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
-                    int32_t heap_idx = ref.as.obj_ref;
-
-                    if (heap_idx < 0 || heap_idx >= gc.objects.size()) throw std::runtime_error("Invalid instance reference.");
-                    
-                    InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[heap_idx]);
-                    if (!obj) throw std::runtime_error("Reference is not an instance.");
-                    if (field_idx < 0 || field_idx >= obj->fields.size()) throw std::runtime_error("Field index out of bounds.");
-
-                    obj->fields[field_idx] = val;
-                    break;
-                }
-
-                // --- Collections (List) ---
-                case OP_NEW_LIST: {
-                    ListObject* list = new ListObject();
-                    int32_t heap_idx = gc.register_object(list);
-                    vm_stack.push_back(Value::make_obj(heap_idx));
-                    break;
-                }
-                case OP_LIST_ADD: {
-                    if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LIST_ADD.");
-                    Value val = vm_stack.back(); vm_stack.pop_back();
-                    Value ref = vm_stack.back(); vm_stack.pop_back();
-
-                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
-                    int32_t heap_idx = ref.as.obj_ref;
-
-                    if (heap_idx < 0 || heap_idx >= gc.objects.size()) throw std::runtime_error("Invalid list reference.");
-                    ListObject* list = dynamic_cast<ListObject*>(gc.objects[heap_idx]);
-                    if (!list) throw std::runtime_error("Reference is not a list.");
-
-                    list->items.push_back(val);
-                    break;
-                }
-                case OP_LIST_GET: {
-                    if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LIST_GET.");
-                    Value idx_val = vm_stack.back(); vm_stack.pop_back();
-                    Value ref = vm_stack.back(); vm_stack.pop_back();
-
-                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
-                    if (idx_val.type != ValueType::INT) throw std::runtime_error("List index must be an integer.");
-
-                    int32_t heap_idx = ref.as.obj_ref;
-                    int32_t idx = idx_val.as.i;
-
-                    if (heap_idx < 0 || heap_idx >= gc.objects.size()) throw std::runtime_error("Invalid list reference.");
-                    ListObject* list = dynamic_cast<ListObject*>(gc.objects[heap_idx]);
-                    if (!list) throw std::runtime_error("Reference is not a list.");
-                    if (idx < 0 || idx >= list->items.size()) throw std::runtime_error("List index out of bounds.");
-
-                    vm_stack.push_back(list->items[idx]);
-                    break;
-                }
-                case OP_LIST_SET: {
-                    if (vm_stack.size() < 3) throw std::runtime_error("Stack underflow during LIST_SET.");
-                    Value val = vm_stack.back(); vm_stack.pop_back();
-                    Value idx_val = vm_stack.back(); vm_stack.pop_back();
-                    Value ref = vm_stack.back(); vm_stack.pop_back();
-
-                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
-                    if (idx_val.type != ValueType::INT) throw std::runtime_error("List index must be an integer.");
-
-                    int32_t heap_idx = ref.as.obj_ref;
-                    int32_t idx = idx_val.as.i;
-
-                    if (heap_idx < 0 || heap_idx >= gc.objects.size()) throw std::runtime_error("Invalid list reference.");
-                    ListObject* list = dynamic_cast<ListObject*>(gc.objects[heap_idx]);
-                    if (!list) throw std::runtime_error("Reference is not a list.");
-                    if (idx < 0 || idx >= list->items.size()) throw std::runtime_error("List index out of bounds.");
-
-                    list->items[idx] = val;
-                    break;
-                }
-                case OP_LIST_SIZE: {
-                    if (vm_stack.empty()) throw std::runtime_error("Stack underflow during LIST_SIZE.");
-                    Value ref = vm_stack.back(); vm_stack.pop_back();
-
-                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
-                    int32_t heap_idx = ref.as.obj_ref;
-
-                    if (heap_idx < 0 || heap_idx >= gc.objects.size()) throw std::runtime_error("Invalid list reference.");
-                    ListObject* list = dynamic_cast<ListObject*>(gc.objects[heap_idx]);
-                    if (!list) throw std::runtime_error("Reference is not a list.");
-
-                    vm_stack.push_back(Value((int32_t)list->items.size()));
-                    break;
-                }
-
-                // --- Arithmetic & Logic ---
                 case OP_ADD: {
                     if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during ADD.");
                     Value b = vm_stack.back(); vm_stack.pop_back();
                     Value a = vm_stack.back(); vm_stack.pop_back();
-
-                    if (a.type == ValueType::INT && b.type == ValueType::INT) {
-                        vm_stack.push_back(Value(a.as.i + b.as.i));
-                    } else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) {
-                        vm_stack.push_back(Value(a.as.f + b.as.f));
-                    } else if (a.type == ValueType::STRING_CONST && b.type == ValueType::STRING_CONST) {
-                        const std::string& str_a = constants[a.as.str_idx];
-                        const std::string& str_b = constants[b.as.str_idx];
-                        
-                        std::string result_str = str_a + str_b;
-                        constants.push_back(result_str);
-
-                        // Trigger GC (Simulate allocation pressure)
+                    if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i + b.as.i));
+                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f + b.as.f));
+                    else if (a.type == ValueType::STRING_CONST && b.type == ValueType::STRING_CONST) {
+                        constants.push_back(constants[a.as.str_idx] + constants[b.as.str_idx]);
                         gc.collect(vm_stack, globals, constants.size());
-                        
                         vm_stack.push_back(Value::make_string(constants.size() - 1));
-                    } else {
-                        throw std::runtime_error("Type mismatch: Cannot add incompatible types.");
-                    }
+                    } else throw std::runtime_error("Type mismatch: Cannot add incompatible types.");
                     break;
                 }
                 case OP_SUB: {
                     if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during SUB.");
                     Value b = vm_stack.back(); vm_stack.pop_back();
                     Value a = vm_stack.back(); vm_stack.pop_back();
-
-                    if (a.type == ValueType::INT && b.type == ValueType::INT) {
-                        vm_stack.push_back(Value(a.as.i - b.as.i));
-                    } else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) {
-                        vm_stack.push_back(Value(a.as.f - b.as.f));
-                    } else {
-                        throw std::runtime_error("Type mismatch: Cannot subtract incompatible types.");
-                    }
+                    if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i - b.as.i));
+                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f - b.as.f));
+                    else throw std::runtime_error("Type mismatch: Cannot subtract incompatible types.");
                     break;
                 }
                 case OP_MUL: {
                     if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during MUL.");
                     Value b = vm_stack.back(); vm_stack.pop_back();
                     Value a = vm_stack.back(); vm_stack.pop_back();
-
-                    if (a.type == ValueType::INT && b.type == ValueType::INT) {
-                        vm_stack.push_back(Value(a.as.i * b.as.i));
-                    } else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) {
-                        vm_stack.push_back(Value(a.as.f * b.as.f));
-                    } else {
-                        throw std::runtime_error("Type mismatch: Cannot multiply incompatible types.");
-                    }
+                    if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i * b.as.i));
+                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f * b.as.f));
+                    else throw std::runtime_error("Type mismatch: Cannot multiply incompatible types.");
                     break;
                 }
                 case OP_DIV: {
                     if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during DIV.");
                     Value b = vm_stack.back(); vm_stack.pop_back();
                     Value a = vm_stack.back(); vm_stack.pop_back();
-
                     if (a.type == ValueType::INT && b.type == ValueType::INT) {
                         if (b.as.i == 0) throw std::runtime_error("Division by zero.");
                         vm_stack.push_back(Value(a.as.i / b.as.i));
                     } else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) {
                         if (b.as.f == 0.0f) throw std::runtime_error("Division by zero.");
                         vm_stack.push_back(Value(a.as.f / b.as.f));
-                    } else {
-                        throw std::runtime_error("Type mismatch: Cannot divide incompatible types.");
-                    }
+                    } else throw std::runtime_error("Type mismatch: Cannot divide incompatible types.");
                     break;
                 }
                 case OP_LESS: {
                     if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LESS.");
                     Value b = vm_stack.back(); vm_stack.pop_back();
                     Value a = vm_stack.back(); vm_stack.pop_back();
-
-                    if (a.type == ValueType::INT && b.type == ValueType::INT) {
-                        vm_stack.push_back(Value(a.as.i < b.as.i));
-                    } else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) {
-                        vm_stack.push_back(Value(a.as.f < b.as.f));
-                    } else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) {
-                        vm_stack.push_back(Value(a.as.c < b.as.c));
-                    } else {
-                        throw std::runtime_error("Type mismatch: Cannot compare incompatible types with LESS.");
-                    }
+                    if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i < b.as.i));
+                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f < b.as.f));
+                    else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c < b.as.c));
+                    else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with LESS.");
                     break;
                 }
                 case OP_GREATER: {
                     if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during GREATER.");
                     Value b = vm_stack.back(); vm_stack.pop_back();
                     Value a = vm_stack.back(); vm_stack.pop_back();
-
-                    if (a.type == ValueType::INT && b.type == ValueType::INT) {
-                        vm_stack.push_back(Value(a.as.i > b.as.i));
-                    } else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) {
-                        vm_stack.push_back(Value(a.as.f > b.as.f));
-                    } else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) {
-                        vm_stack.push_back(Value(a.as.c > b.as.c));
-                    } else {
-                        throw std::runtime_error("Type mismatch: Cannot compare incompatible types with GREATER.");
-                    }
+                    if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i > b.as.i));
+                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f > b.as.f));
+                    else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c > b.as.c));
+                    else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with GREATER.");
                     break;
                 }
-
-                // --- Functions & Calls ---
+                case OP_NEW_INSTANCE: {
+                    int32_t class_name_idx; std::memcpy(&class_name_idx, ip, 4); ip += 4;
+                    int32_t field_count; std::memcpy(&field_count, ip, 4); ip += 4;
+                    InstanceObject* obj = new InstanceObject(class_name_idx, field_count);
+                    vm_stack.push_back(Value::make_obj(gc.register_object(obj))); break;
+                }
+                case OP_GET_FIELD: {
+                    int32_t field_idx; std::memcpy(&field_idx, ip, 4); ip += 4;
+                    if (vm_stack.empty()) throw std::runtime_error("Stack underflow during GET_FIELD.");
+                    Value ref = vm_stack.back(); vm_stack.pop_back();
+                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[ref.as.obj_ref]);
+                    if (!obj) throw std::runtime_error("Reference is not an instance.");
+                    if (field_idx < 0 || field_idx >= (int32_t)obj->fields.size()) throw std::runtime_error("Field index out of bounds.");
+                    vm_stack.push_back(obj->fields[field_idx]); break;
+                }
+                case OP_SET_FIELD: {
+                    int32_t field_idx; std::memcpy(&field_idx, ip, 4); ip += 4;
+                    if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during SET_FIELD.");
+                    Value val = vm_stack.back(); vm_stack.pop_back();
+                    Value ref = vm_stack.back(); vm_stack.pop_back();
+                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[ref.as.obj_ref]);
+                    if (!obj) throw std::runtime_error("Reference is not an instance.");
+                    if (field_idx < 0 || field_idx >= (int32_t)obj->fields.size()) throw std::runtime_error("Field index out of bounds.");
+                    obj->fields[field_idx] = val; break;
+                }
+                case OP_NEW_LIST: {
+                    ListObject* list = new ListObject();
+                    vm_stack.push_back(Value::make_obj(gc.register_object(list))); break;
+                }
+                case OP_LIST_ADD: {
+                    if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LIST_ADD.");
+                    Value val = vm_stack.back(); vm_stack.pop_back();
+                    Value ref = vm_stack.back(); vm_stack.pop_back();
+                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    ListObject* list = dynamic_cast<ListObject*>(gc.objects[ref.as.obj_ref]);
+                    if (!list) throw std::runtime_error("Reference is not a list.");
+                    list->items.push_back(val); break;
+                }
+                case OP_LIST_GET: {
+                    if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LIST_GET.");
+                    Value idx_val = vm_stack.back(); vm_stack.pop_back();
+                    Value ref = vm_stack.back(); vm_stack.pop_back();
+                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    ListObject* list = dynamic_cast<ListObject*>(gc.objects[ref.as.obj_ref]);
+                    if (!list) throw std::runtime_error("Reference is not a list.");
+                    vm_stack.push_back(list->items[idx_val.as.i]); break;
+                }
+                case OP_LIST_SET: {
+                    if (vm_stack.size() < 3) throw std::runtime_error("Stack underflow during LIST_SET.");
+                    Value val = vm_stack.back(); vm_stack.pop_back();
+                    Value idx_val = vm_stack.back(); vm_stack.pop_back();
+                    Value ref = vm_stack.back(); vm_stack.pop_back();
+                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    ListObject* list = dynamic_cast<ListObject*>(gc.objects[ref.as.obj_ref]);
+                    if (!list) throw std::runtime_error("Reference is not a list.");
+                    list->items[idx_val.as.i] = val; break;
+                }
+                case OP_LIST_SIZE: {
+                    if (vm_stack.empty()) throw std::runtime_error("Stack underflow during LIST_SIZE.");
+                    Value ref = vm_stack.back(); vm_stack.pop_back();
+                    if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    ListObject* list = dynamic_cast<ListObject*>(gc.objects[ref.as.obj_ref]);
+                    if (!list) throw std::runtime_error("Reference is not a list.");
+                    vm_stack.push_back(Value((int32_t)list->items.size())); break;
+                }
                 case OP_CALL: {
-                    int32_t target_offset;
-                    std::memcpy(&target_offset, ip, sizeof(int32_t));
-                    ip += 4;
-
+                    int32_t target_offset; std::memcpy(&target_offset, ip, 4); ip += 4;
                     uint8_t arg_count = *ip++;
-                    
                     if (vm_stack.size() < arg_count) throw std::runtime_error("Stack underflow during CALL.");
-                    
                     fp_stack.push_back(fp);
-                    // FP points to the first argument
-                    fp = vm_stack.size() - arg_count; 
-
-                    call_stack.push_back(ip); // Save return address
-                    ip = bytecode.data() + target_offset; // Jump to function
-                    break;
+                    fp = vm_stack.size() - arg_count;
+                    call_stack.push_back(ip);
+                    ip = bytecode.data() + target_offset; break;
                 }
                 case OP_RETURN: {
-                    if (call_stack.empty()) {
-                        throw std::runtime_error("RETURN with empty call stack.");
-                    }
-                    
+                    if (call_stack.empty()) throw std::runtime_error("RETURN with empty call stack.");
                     Value result = vm_stack.back(); vm_stack.pop_back();
-                    
-                    // Restore stack (remove args/locals)
-                    vm_stack.resize(fp); 
-                    vm_stack.push_back(result); // Push result back
-
-                    ip = call_stack.back();
-                    call_stack.pop_back();
-                    fp = fp_stack.back();
-                    fp_stack.pop_back();
-                    break;
+                    vm_stack.resize(fp);
+                    vm_stack.push_back(result);
+                    ip = call_stack.back(); call_stack.pop_back();
+                    fp = fp_stack.back(); fp_stack.pop_back(); break;
                 }
-
-                // --- Utilities ---
                 case OP_POP: vm_stack.pop_back(); break;
                 case OP_PRINT: {
                     if (vm_stack.empty()) throw std::runtime_error("Stack underflow during PRINT.");
-                    Value val = vm_stack.back();
-                    vm_stack.pop_back();
-                    
+                    Value val = vm_stack.back(); vm_stack.pop_back();
                     if (val.type == ValueType::STRING_CONST) {
                         size_t idx = val.as.str_idx;
                         if (idx < constants.size()) std::cout << constants[idx] << std::endl;
@@ -486,12 +614,11 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
                     }
                     break;
                 }
-
-                default: {
+                default:
                     throw std::runtime_error("Unknown opcode encountered.");
-                }
             }
         }
+#endif
     } catch (const std::runtime_error& e) {
         std::cerr << "AVM Runtime Error: " << e.what() << std::endl;
     }
