@@ -98,11 +98,10 @@ impl Emitter {
                 }
             }
             Expr::GetField(obj_expr, field_name) => {
-                // Check for static field access (ClassName.field_name)
                 if let Expr::Variable(var_name) = &**obj_expr {
                     if symbols.classes.contains_key(var_name) && !symbols.locals.contains_key(var_name) && !symbols.variables.contains_key(var_name) {
                         if let Some(class_info) = symbols.classes.get(var_name) {
-                            if let Some(global_idx) = class_info.static_fields.get(field_name) {
+                            if let Some((global_idx, _ft)) = class_info.static_fields.get(field_name) {
                                 self.emit_byte(OpCode::LoadGlobal.into());
                                 self.emit_int(*global_idx as i32);
                                 return;
@@ -118,13 +117,11 @@ impl Emitter {
                 // Hack: Find field index by looking at all classes (since we don't track types yet)
                 let mut field_idx = None;
                 
-                // Sort classes to ensure deterministic compilation
                 let mut classes: Vec<_> = symbols.classes.values().collect();
                 classes.sort_by_key(|c| &c.name);
 
-                // FIXME: no type tracking
                 for cls in classes {
-                    if let Some((idx, vis)) = cls.fields.get(field_name) {
+                    if let Some((idx, vis, _ft)) = cls.fields.get(field_name) {
                         if *vis == crate::ast::Visibility::Private && self.current_class.as_deref() != Some(cls.name.as_str()) {
                             panic!("Cannot access private field '{}' of class '{}'", field_name, cls.name);
                         }
@@ -284,6 +281,14 @@ impl Emitter {
                 self.emit_byte(args.len() as u8);
             }
             Expr::Binary(left, op, right) => {
+                // Type check: both operands should be the same type
+                let lt = symbols.infer_type(left);
+                let rt = symbols.infer_type(right);
+                if let (Some(ref l), Some(ref r)) = (&lt, &rt) {
+                    if !symbols.types_compatible(l, r) {
+                        panic!("Type mismatch: cannot apply {:?} to {:?} and {:?}", op, l, r);
+                    }
+                }
                 self.emit_expr(left, symbols);
                 self.emit_expr(right, symbols);
                 match op {
@@ -293,6 +298,10 @@ impl Emitter {
                     Op::Div => self.emit_byte(OpCode::Div.into()),
                     Op::LessThan => self.emit_byte(OpCode::Less.into()),
                     Op::GreaterThan => self.emit_byte(OpCode::Greater.into()),
+                    Op::Equals => self.emit_byte(OpCode::Equal.into()),
+                    Op::NotEquals => self.emit_byte(OpCode::NotEqual.into()),
+                    Op::LessEquals => self.emit_byte(OpCode::LessEqual.into()),
+                    Op::GreaterEquals => self.emit_byte(OpCode::GreaterEqual.into()),
                 }
             }
         }
@@ -340,14 +349,26 @@ impl Emitter {
     pub fn emit_stmt(&mut self, stmt: &Stmt, symbols: &mut SymbolTable) {
         match stmt {
             Stmt::VarDecl(name, decl_type, expr) => {
-                self.emit_expr(expr, symbols); // Push value
-                
-                // Track declared type for List method dispatch
-                if let Some(t) = decl_type {
-                    symbols.variable_types.insert(name.clone(), t.clone());
+                // Type check: if declared type is given, verify initializer matches
+                if let Some(ref expected) = decl_type {
+                    if let Some(actual) = symbols.infer_type(expr) {
+                        if !symbols.types_compatible(expected, &actual) {
+                            panic!("Type mismatch: cannot assign {} to variable '{}' of type {}", 
+                                format!("{:?}", actual), name, format!("{:?}", expected));
+                        }
+                    }
                 }
 
-                // Assign index
+                self.emit_expr(expr, symbols);
+                
+                // Track declared type for List method dispatch and type inference
+                let actual_type = if let Some(t) = decl_type {
+                    t.clone()
+                } else {
+                    symbols.infer_type(expr).unwrap_or(crate::ast::Type::Int)
+                };
+                symbols.variable_types.insert(name.clone(), actual_type);
+
                 let index = symbols.next_var_index;
                 symbols.variables.insert(name.clone(), index);
                 symbols.next_var_index += 1;
@@ -489,36 +510,31 @@ impl Emitter {
                 symbols.next_local_index = old_local_index;
             }
             Stmt::Class(name, parent, fields, methods, implements) => {
-                // Build field map, separating instance and static fields
                 let mut field_map = HashMap::new();
                 let mut static_field_map = HashMap::new();
 
-                // If there's a parent, inherit its fields first
                 let mut instance_idx = 0u32;
                 if let Some(parent_name) = parent {
                     if let Some(parent_info) = symbols.classes.get(parent_name).cloned() {
-                        // Copy parent instance fields
-                        for (fname, (idx, vis)) in &parent_info.fields {
-                            field_map.insert(fname.clone(), (*idx, vis.clone()));
+                        for (fname, (idx, vis, ft)) in &parent_info.fields {
+                            field_map.insert(fname.clone(), (*idx, vis.clone(), ft.clone()));
                             if *idx >= instance_idx { instance_idx = *idx + 1; }
                         }
-                        // Copy parent static fields
-                        for (fname, idx) in &parent_info.static_fields {
-                            static_field_map.insert(fname.clone(), *idx);
+                        for (fname, (idx, ft)) in &parent_info.static_fields {
+                            static_field_map.insert(fname.clone(), (*idx, ft.clone()));
                         }
                     } else {
                         panic!("Parent class '{}' not found for class '{}'", parent_name, name);
                     }
                 }
 
-                for (f, _, vis, is_static) in fields.iter() {
+                for (f, ftype, vis, is_static) in fields.iter() {
                     if *is_static {
-                        // Static fields are stored as globals
                         let global_idx = symbols.next_var_index;
                         symbols.next_var_index += 1;
-                        static_field_map.insert(f.clone(), global_idx);
+                        static_field_map.insert(f.clone(), (global_idx, ftype.clone()));
                     } else {
-                        field_map.insert(f.clone(), (instance_idx, vis.clone()));
+                        field_map.insert(f.clone(), (instance_idx, vis.clone(), ftype.clone()));
                         instance_idx += 1;
                     }
                 }
@@ -579,12 +595,11 @@ impl Emitter {
                 self.current_class = old_class;
             }
             Stmt::FieldSet(obj, field, value) => {
-                // Check for static field set (ClassName.field_name = value)
                 if let Expr::Variable(var_name) = &**obj {
                     let mut is_static_global_idx = None;
                     if symbols.classes.contains_key(var_name) && !symbols.locals.contains_key(var_name) && !symbols.variables.contains_key(var_name) {
                         if let Some(class_info) = symbols.classes.get(var_name) {
-                            if let Some(global_idx) = class_info.static_fields.get(field) {
+                            if let Some((global_idx, _ft)) = class_info.static_fields.get(field) {
                                 is_static_global_idx = Some(*global_idx);
                             } else {
                                 panic!("Static field '{}' not found in class '{}'", field, var_name);
@@ -592,21 +607,19 @@ impl Emitter {
                         }
                     }
                     if let Some(global_idx) = is_static_global_idx {
-                        self.emit_expr(value, symbols); // Push value to assign
+                        self.emit_expr(value, symbols);
                         self.emit_byte(OpCode::StoreGlobal.into());
                         self.emit_int(global_idx as i32);
                         return;
                     }
                 }
 
-                self.emit_expr(obj, symbols);   // Push object ref
-                self.emit_expr(value, symbols); // Push value to assign
+                self.emit_expr(obj, symbols);
+                self.emit_expr(value, symbols);
                 
-                // Resolve field index
                 let mut field_idx = None;
-                // FIXME: no type tracking
                 for cls in symbols.classes.values() {
-                    if let Some((idx, vis)) = cls.fields.get(field) {
+                    if let Some((idx, vis, _ft)) = cls.fields.get(field) {
                         if *vis == crate::ast::Visibility::Private && self.current_class.as_deref() != Some(cls.name.as_str()) {
                             panic!("Cannot access private field '{}' of class '{}'", field, cls.name);
                         }

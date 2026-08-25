@@ -30,6 +30,10 @@ pub enum OpCode {
     Div = 0x23,
     Less = 0x24,
     Greater = 0x25,
+    Equal = 0x26,
+    NotEqual = 0x27,
+    LessEqual = 0x28,
+    GreaterEqual = 0x29,
 
     // --- Object-Oriented ---
     NewInstance = 0x40,

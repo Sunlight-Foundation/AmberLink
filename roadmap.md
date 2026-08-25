@@ -56,7 +56,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 ## Phase 5 — Performance (v0.8)
 *The "Power" milestone — close the gap with the JVM, then surpass it.*
 
-- [ ] **Threaded dispatch (computed gotos)** — replace the `switch` opcode loop with a jump table to eliminate branch misprediction; one of the highest-impact pure interpreter optimizations
+- [x] **Threaded dispatch (computed gotos)** — replace the `switch` opcode loop with a jump table to eliminate branch misprediction; one of the highest-impact pure interpreter optimizations
 - [ ] **NaN-boxing** — pack `Value` into a single 64-bit double using NaN bits for type tags; cuts memory bandwidth and struct size significantly
 - [ ] **Register-based bytecode** — migrate AVM from stack-based to register-based instruction set to reduce unnecessary push/pop; significant rewrite but foundational for JIT
 - [ ] **Inline caching** — cache resolved field/method indices at call sites after first lookup; eliminates linear scans on repeat access

@@ -31,6 +31,10 @@ enum OpCode : uint8_t {
     OP_DIV            = 0x23,
     OP_LESS           = 0x24, // Pop b, Pop a, Push (a < b)
     OP_GREATER        = 0x25, // Pop b, Pop a, Push (a > b)
+    OP_EQUAL          = 0x26, // Pop b, Pop a, Push (a == b)
+    OP_NOT_EQUAL      = 0x27, // Pop b, Pop a, Push (a != b)
+    OP_LESS_EQUAL     = 0x28, // Pop b, Pop a, Push (a <= b)
+    OP_GREATER_EQUAL  = 0x29, // Pop b, Pop a, Push (a >= b)
 
     // --- Object-Oriented ---
     OP_NEW_INSTANCE   = 0x40, // Operand: Class ID (u32). Push instance ref.

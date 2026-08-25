@@ -63,6 +63,10 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
             dispatch_table[OP_DIV]            = &&lbl_OP_DIV;
             dispatch_table[OP_LESS]           = &&lbl_OP_LESS;
             dispatch_table[OP_GREATER]        = &&lbl_OP_GREATER;
+            dispatch_table[OP_EQUAL]          = &&lbl_OP_EQUAL;
+            dispatch_table[OP_NOT_EQUAL]      = &&lbl_OP_NOT_EQUAL;
+            dispatch_table[OP_LESS_EQUAL]     = &&lbl_OP_LESS_EQUAL;
+            dispatch_table[OP_GREATER_EQUAL]  = &&lbl_OP_GREATER_EQUAL;
             dispatch_table[OP_NEW_INSTANCE]   = &&lbl_OP_NEW_INSTANCE;
             dispatch_table[OP_GET_FIELD]      = &&lbl_OP_GET_FIELD;
             dispatch_table[OP_SET_FIELD]      = &&lbl_OP_SET_FIELD;
@@ -249,6 +253,50 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
             else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f > b.as.f));
             else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c > b.as.c));
             else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with GREATER.");
+            DISPATCH();
+        }
+        lbl_OP_EQUAL: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during EQUAL.");
+            Value b = vm_stack.back(); vm_stack.pop_back();
+            Value a = vm_stack.back(); vm_stack.pop_back();
+            if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i == b.as.i));
+            else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f == b.as.f));
+            else if (a.type == ValueType::BOOL && b.type == ValueType::BOOL) vm_stack.push_back(Value(a.as.b == b.as.b));
+            else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c == b.as.c));
+            else if (a.type == ValueType::STRING_CONST && b.type == ValueType::STRING_CONST) vm_stack.push_back(Value(constants[a.as.str_idx] == constants[b.as.str_idx]));
+            else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with EQUAL.");
+            DISPATCH();
+        }
+        lbl_OP_NOT_EQUAL: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during NOT_EQUAL.");
+            Value b = vm_stack.back(); vm_stack.pop_back();
+            Value a = vm_stack.back(); vm_stack.pop_back();
+            if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i != b.as.i));
+            else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f != b.as.f));
+            else if (a.type == ValueType::BOOL && b.type == ValueType::BOOL) vm_stack.push_back(Value(a.as.b != b.as.b));
+            else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c != b.as.c));
+            else if (a.type == ValueType::STRING_CONST && b.type == ValueType::STRING_CONST) vm_stack.push_back(Value(constants[a.as.str_idx] != constants[b.as.str_idx]));
+            else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with NOT_EQUAL.");
+            DISPATCH();
+        }
+        lbl_OP_LESS_EQUAL: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LESS_EQUAL.");
+            Value b = vm_stack.back(); vm_stack.pop_back();
+            Value a = vm_stack.back(); vm_stack.pop_back();
+            if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i <= b.as.i));
+            else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f <= b.as.f));
+            else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c <= b.as.c));
+            else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with LESS_EQUAL.");
+            DISPATCH();
+        }
+        lbl_OP_GREATER_EQUAL: {
+            if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during GREATER_EQUAL.");
+            Value b = vm_stack.back(); vm_stack.pop_back();
+            Value a = vm_stack.back(); vm_stack.pop_back();
+            if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i >= b.as.i));
+            else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f >= b.as.f));
+            else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c >= b.as.c));
+            else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with GREATER_EQUAL.");
             DISPATCH();
         }
         lbl_OP_NEW_INSTANCE: {
@@ -440,8 +488,10 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
                     Value idx_val = vm_stack.back(); vm_stack.pop_back();
                     Value ref = vm_stack.back(); vm_stack.pop_back();
                     if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    if (idx_val.type != ValueType::INT) throw std::runtime_error("Array index must be an integer.");
                     ArrayObject* arr = dynamic_cast<ArrayObject*>(gc.objects[ref.as.obj_ref]);
                     if (!arr) throw std::runtime_error("Reference is not an array.");
+                    if (idx_val.as.i < 0 || idx_val.as.i >= (int32_t)arr->data.size()) throw std::runtime_error("Array index out of bounds.");
                     arr->data[idx_val.as.i] = val; break;
                 }
                 case OP_LOAD_ARRAY: {
@@ -449,8 +499,10 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
                     Value idx_val = vm_stack.back(); vm_stack.pop_back();
                     Value ref = vm_stack.back(); vm_stack.pop_back();
                     if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    if (idx_val.type != ValueType::INT) throw std::runtime_error("Array index must be an integer.");
                     ArrayObject* arr = dynamic_cast<ArrayObject*>(gc.objects[ref.as.obj_ref]);
                     if (!arr) throw std::runtime_error("Reference is not an array.");
+                    if (idx_val.as.i < 0 || idx_val.as.i >= (int32_t)arr->data.size()) throw std::runtime_error("Array index out of bounds.");
                     vm_stack.push_back(arr->data[idx_val.as.i]); break;
                 }
                 case OP_ADD: {
@@ -517,6 +569,50 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
                     else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with GREATER.");
                     break;
                 }
+                case OP_EQUAL: {
+                    if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during EQUAL.");
+                    Value b = vm_stack.back(); vm_stack.pop_back();
+                    Value a = vm_stack.back(); vm_stack.pop_back();
+                    if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i == b.as.i));
+                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f == b.as.f));
+                    else if (a.type == ValueType::BOOL && b.type == ValueType::BOOL) vm_stack.push_back(Value(a.as.b == b.as.b));
+                    else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c == b.as.c));
+                    else if (a.type == ValueType::STRING_CONST && b.type == ValueType::STRING_CONST) vm_stack.push_back(Value(constants[a.as.str_idx] == constants[b.as.str_idx]));
+                    else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with EQUAL.");
+                    break;
+                }
+                case OP_NOT_EQUAL: {
+                    if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during NOT_EQUAL.");
+                    Value b = vm_stack.back(); vm_stack.pop_back();
+                    Value a = vm_stack.back(); vm_stack.pop_back();
+                    if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i != b.as.i));
+                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f != b.as.f));
+                    else if (a.type == ValueType::BOOL && b.type == ValueType::BOOL) vm_stack.push_back(Value(a.as.b != b.as.b));
+                    else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c != b.as.c));
+                    else if (a.type == ValueType::STRING_CONST && b.type == ValueType::STRING_CONST) vm_stack.push_back(Value(constants[a.as.str_idx] != constants[b.as.str_idx]));
+                    else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with NOT_EQUAL.");
+                    break;
+                }
+                case OP_LESS_EQUAL: {
+                    if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LESS_EQUAL.");
+                    Value b = vm_stack.back(); vm_stack.pop_back();
+                    Value a = vm_stack.back(); vm_stack.pop_back();
+                    if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i <= b.as.i));
+                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f <= b.as.f));
+                    else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c <= b.as.c));
+                    else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with LESS_EQUAL.");
+                    break;
+                }
+                case OP_GREATER_EQUAL: {
+                    if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during GREATER_EQUAL.");
+                    Value b = vm_stack.back(); vm_stack.pop_back();
+                    Value a = vm_stack.back(); vm_stack.pop_back();
+                    if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i >= b.as.i));
+                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f >= b.as.f));
+                    else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c >= b.as.c));
+                    else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with GREATER_EQUAL.");
+                    break;
+                }
                 case OP_NEW_INSTANCE: {
                     int32_t class_name_idx; std::memcpy(&class_name_idx, ip, 4); ip += 4;
                     int32_t field_count; std::memcpy(&field_count, ip, 4); ip += 4;
@@ -562,8 +658,10 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
                     Value idx_val = vm_stack.back(); vm_stack.pop_back();
                     Value ref = vm_stack.back(); vm_stack.pop_back();
                     if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    if (idx_val.type != ValueType::INT) throw std::runtime_error("List index must be an integer.");
                     ListObject* list = dynamic_cast<ListObject*>(gc.objects[ref.as.obj_ref]);
                     if (!list) throw std::runtime_error("Reference is not a list.");
+                    if (idx_val.as.i < 0 || idx_val.as.i >= (int32_t)list->items.size()) throw std::runtime_error("List index out of bounds.");
                     vm_stack.push_back(list->items[idx_val.as.i]); break;
                 }
                 case OP_LIST_SET: {
@@ -572,8 +670,10 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
                     Value idx_val = vm_stack.back(); vm_stack.pop_back();
                     Value ref = vm_stack.back(); vm_stack.pop_back();
                     if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
+                    if (idx_val.type != ValueType::INT) throw std::runtime_error("List index must be an integer.");
                     ListObject* list = dynamic_cast<ListObject*>(gc.objects[ref.as.obj_ref]);
                     if (!list) throw std::runtime_error("Reference is not a list.");
+                    if (idx_val.as.i < 0 || idx_val.as.i >= (int32_t)list->items.size()) throw std::runtime_error("List index out of bounds.");
                     list->items[idx_val.as.i] = val; break;
                 }
                 case OP_LIST_SIZE: {

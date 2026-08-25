@@ -3,95 +3,118 @@
 #[derive(Debug, PartialEq, Clone)]
 pub enum Token {
     Var, Mut, Func, Class, Return, Print,
-    Int, Void, String, Bool, Float, Char, List, // Types
+    Int, Void, String, Bool, Float, Char, List,
     New, Init,
     If, Else, While, For,
     Public, Private, Protected,
     Static, Extends, Interface, Implements,
-    True, False, // Boolean literals
+    True, False,
     Identifier(String),
     Number(i64),
-    FloatLit(String), // Keep as string to parse later or f64
+    FloatLit(String),
     CharLit(char),
     StringLit(String),
-    Equals, DoubleEquals, NotEquals, Plus, Minus, Star, Slash, Comma, Dot, LessThan, GreaterThan, Semicolon,
+    Equals, DoubleEquals, NotEquals, LessEquals, GreaterEquals, Plus, Minus, Star, Slash, Comma, Dot, LessThan, GreaterThan, Semicolon,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Newline,
     EOF,
 }
 
+#[derive(Debug, Clone)]
+pub struct SpannedToken {
+    pub token: Token,
+    pub line: usize,
+}
+
 pub struct Lexer {
     input: Vec<char>,
     pos: usize,
+    line: usize,
 }
 
 impl Lexer {
     pub fn new(input: String) -> Self {
-        Self { input: input.chars().collect(), pos: 0 }
+        Self { input: input.chars().collect(), pos: 0, line: 1 }
     }
 
-    pub fn tokenize(&mut self) -> Vec<Token> {
+    fn push(&self, tokens: &mut Vec<SpannedToken>, token: Token) {
+        tokens.push(SpannedToken { token, line: self.line });
+    }
+
+    pub fn tokenize(&mut self) -> Vec<SpannedToken> {
         let mut tokens = Vec::new();
         while self.pos < self.input.len() {
             let c = self.input[self.pos];
             match c {
                 ' ' | '\r' | '\t' => { self.pos += 1; }
-                '\n' => { tokens.push(Token::Newline); self.pos += 1; }
+                '\n' => { self.push(&mut tokens, Token::Newline); self.line += 1; self.pos += 1; }
                 '=' => {
                     if self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '=' {
-                        tokens.push(Token::DoubleEquals); self.pos += 2;
+                        self.push(&mut tokens, Token::DoubleEquals); self.pos += 2;
                     } else {
-                        tokens.push(Token::Equals); self.pos += 1;
+                        self.push(&mut tokens, Token::Equals); self.pos += 1;
                     }
                 }
                 '!' => {
                     if self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '=' {
-                        tokens.push(Token::NotEquals); self.pos += 2;
+                        self.push(&mut tokens, Token::NotEquals); self.pos += 2;
                     } else {
                         self.pos += 1;
                     }
                 }
-                '+' => { tokens.push(Token::Plus); self.pos += 1; }
-                '-' => { tokens.push(Token::Minus); self.pos += 1; }
-                '*' => { tokens.push(Token::Star); self.pos += 1; }
-                '/' => { 
+                '+' => { self.push(&mut tokens, Token::Plus); self.pos += 1; }
+                '-' => { self.push(&mut tokens, Token::Minus); self.pos += 1; }
+                '*' => { self.push(&mut tokens, Token::Star); self.pos += 1; }
+                '/' => {
                     if self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '/' {
                         while self.pos < self.input.len() && self.input[self.pos] != '\n' {
                             self.pos += 1;
                         }
                     } else {
-                        tokens.push(Token::Slash); self.pos += 1; 
+                        self.push(&mut tokens, Token::Slash); self.pos += 1;
                     }
                 }
-                '<' => { tokens.push(Token::LessThan); self.pos += 1; }
-                '>' => { tokens.push(Token::GreaterThan); self.pos += 1; }
-                '.' => { tokens.push(Token::Dot); self.pos += 1; }
-                ',' => { tokens.push(Token::Comma); self.pos += 1; }
-                ';' => { tokens.push(Token::Semicolon); self.pos += 1; }
-                '(' => { tokens.push(Token::LParen); self.pos += 1; }
-                ')' => { tokens.push(Token::RParen); self.pos += 1; }
-                '{' => { tokens.push(Token::LBrace); self.pos += 1; }
-                '}' => { tokens.push(Token::RBrace); self.pos += 1; }
-                '[' => { tokens.push(Token::LBracket); self.pos += 1; }
-                ']' => { tokens.push(Token::RBracket); self.pos += 1; }
-                '\'' => tokens.push(self.read_char()),
-                'a'..='z' | 'A'..='Z' | '_' => tokens.push(self.read_identifier()),
-                '0'..='9' => tokens.push(self.read_number()),
-                '"' => tokens.push(self.read_string()),
-                _ => { self.pos += 1; } // Skip unknowns
+                '<' => {
+                    if self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '=' {
+                        self.push(&mut tokens, Token::LessEquals); self.pos += 2;
+                    } else {
+                        self.push(&mut tokens, Token::LessThan); self.pos += 1;
+                    }
+                }
+                '>' => {
+                    if self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '=' {
+                        self.push(&mut tokens, Token::GreaterEquals); self.pos += 2;
+                    } else {
+                        self.push(&mut tokens, Token::GreaterThan); self.pos += 1;
+                    }
+                }
+                '.' => { self.push(&mut tokens, Token::Dot); self.pos += 1; }
+                ',' => { self.push(&mut tokens, Token::Comma); self.pos += 1; }
+                ';' => { self.push(&mut tokens, Token::Semicolon); self.pos += 1; }
+                '(' => { self.push(&mut tokens, Token::LParen); self.pos += 1; }
+                ')' => { self.push(&mut tokens, Token::RParen); self.pos += 1; }
+                '{' => { self.push(&mut tokens, Token::LBrace); self.pos += 1; }
+                '}' => { self.push(&mut tokens, Token::RBrace); self.pos += 1; }
+                '[' => { self.push(&mut tokens, Token::LBracket); self.pos += 1; }
+                ']' => { self.push(&mut tokens, Token::RBracket); self.pos += 1; }
+                '\'' => self.push_char(&mut tokens),
+                'a'..='z' | 'A'..='Z' | '_' => self.push_identifier(&mut tokens),
+                '0'..='9' => self.push_number(&mut tokens),
+                '"' => self.push_string(&mut tokens),
+                _ => { self.pos += 1; }
             }
         }
-        tokens.push(Token::EOF);
+        self.push(&mut tokens, Token::EOF);
         tokens
     }
 
-    fn read_identifier(&mut self) -> Token {
+    fn push_identifier(&mut self, tokens: &mut Vec<SpannedToken>) {
         let start = self.pos;
         while self.pos < self.input.len() && (self.input[self.pos].is_alphanumeric() || self.input[self.pos] == '_') {
             self.pos += 1;
         }
         let text: String = self.input[start..self.pos].iter().collect();
-        match text.as_str() {
+        let token = match text.as_str() {
             "var" => Token::Var,
             "int" => Token::Int,
             "float" => Token::Float,
@@ -99,7 +122,7 @@ impl Lexer {
             "void" => Token::Void,
             "String" => Token::String,
             "bool" => Token::Bool,
-            "List" => Token::List, // New Token
+            "List" => Token::List,
             "true" => Token::True,
             "false" => Token::False,
             "new" => Token::New,
@@ -121,10 +144,11 @@ impl Lexer {
             "interface" => Token::Interface,
             "implements" => Token::Implements,
             _ => Token::Identifier(text),
-        }
+        };
+        self.push(tokens, token);
     }
 
-    fn read_number(&mut self) -> Token {
+    fn push_number(&mut self, tokens: &mut Vec<SpannedToken>) {
         let start = self.pos;
         let mut is_float = false;
 
@@ -133,9 +157,6 @@ impl Lexer {
             if c.is_digit(10) {
                 self.pos += 1;
             } else if c == '.' && !is_float {
-                // Check if next char is digit to avoid confusion with method call or property access (though usually space separates, but 1.toString() is valid in some langs)
-                // In this simple lexer, we assume 1.2 is float. 1.method is not supported yet or requires lookahead.
-                // Let's assume if we see dot followed by digit, it's float.
                 if self.pos + 1 < self.input.len() && self.input[self.pos + 1].is_digit(10) {
                     is_float = true;
                     self.pos += 1;
@@ -149,36 +170,35 @@ impl Lexer {
 
         let text: String = self.input[start..self.pos].iter().collect();
         if is_float {
-            Token::FloatLit(text)
+            self.push(tokens, Token::FloatLit(text));
         } else {
-            Token::Number(text.parse().unwrap())
+            self.push(tokens, Token::Number(text.parse().unwrap()));
         }
     }
 
-    fn read_string(&mut self) -> Token {
-        self.pos += 1; // Skip opening quote
+    fn push_string(&mut self, tokens: &mut Vec<SpannedToken>) {
+        self.pos += 1;
         let start = self.pos;
         while self.pos < self.input.len() && self.input[self.pos] != '"' {
             self.pos += 1;
         }
         let text: String = self.input[start..self.pos].iter().collect();
-        if self.pos < self.input.len() { self.pos += 1; } // Skip closing quote
-        Token::StringLit(text)
+        if self.pos < self.input.len() { self.pos += 1; }
+        self.push(tokens, Token::StringLit(text));
     }
 
-    fn read_char(&mut self) -> Token {
-        self.pos += 1; // Skip opening quote
-        if self.pos >= self.input.len() { return Token::EOF; }
+    fn push_char(&mut self, tokens: &mut Vec<SpannedToken>) {
+        self.pos += 1;
+        if self.pos >= self.input.len() { self.push(tokens, Token::EOF); return; }
 
         let c = self.input[self.pos];
         self.pos += 1;
 
         if self.pos < self.input.len() && self.input[self.pos] == '\'' {
-            self.pos += 1; // Skip closing quote
-            Token::CharLit(c)
+            self.pos += 1;
+            self.push(tokens, Token::CharLit(c));
         } else {
-            // Error or malformed char
-            Token::CharLit(c)
+            self.push(tokens, Token::CharLit(c));
         }
     }
 }

@@ -11,6 +11,10 @@ pub enum Op {
     Div,
     LessThan,
     GreaterThan,
+    Equals,
+    NotEquals,
+    LessEquals,
+    GreaterEquals,
 }
 
 #[derive(Debug, Clone, PartialEq)]
