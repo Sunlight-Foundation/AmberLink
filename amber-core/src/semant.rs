@@ -38,6 +38,7 @@ pub struct SymbolTable {
     pub interfaces: HashMap<String, InterfaceInfo>,
     pub variables: HashMap<String, u32>, // Maps "x" -> 0 (Global Index)
     pub locals: HashMap<String, u32>,    // Maps "n" -> 0 (Local Index relative to FP)
+    pub variable_types: HashMap<String, crate::ast::Type>, // Maps variable name -> declared type
     pub next_var_index: u32,
     pub next_local_index: u32,
 }
@@ -50,6 +51,7 @@ impl SymbolTable {
             interfaces: HashMap::new(),
             variables: HashMap::new(),
             locals: HashMap::new(),
+            variable_types: HashMap::new(),
             next_var_index: 0,
             next_local_index: 0,
         }

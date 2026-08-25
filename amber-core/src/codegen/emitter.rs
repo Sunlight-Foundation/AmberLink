@@ -138,6 +138,41 @@ impl Emitter {
                 self.emit_int(idx as i32);
             }
             Expr::MethodCall(obj, method_name, args) => {
+                // Intercept List built-in methods before class dispatch
+                let is_list_var = if let Expr::Variable(var_name) = &**obj {
+                    matches!(symbols.variable_types.get(var_name), Some(crate::ast::Type::List))
+                } else { false };
+
+                if is_list_var {
+                    match method_name.as_str() {
+                        "add" if args.len() == 1 => {
+                            self.emit_expr(obj, symbols);
+                            self.emit_expr(&args[0], symbols);
+                            self.emit_byte(OpCode::ListAdd.into());
+                            return;
+                        }
+                        "set" if args.len() == 2 => {
+                            self.emit_expr(obj, symbols);
+                            self.emit_expr(&args[0], symbols);
+                            self.emit_expr(&args[1], symbols);
+                            self.emit_byte(OpCode::ListSet.into());
+                            return;
+                        }
+                        "get" if args.len() == 1 => {
+                            self.emit_expr(obj, symbols);
+                            self.emit_expr(&args[0], symbols);
+                            self.emit_byte(OpCode::ListGet.into());
+                            return;
+                        }
+                        "size" if args.is_empty() => {
+                            self.emit_expr(obj, symbols);
+                            self.emit_byte(OpCode::ListSize.into());
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
                 let mut is_static_call = false;
                 if let Expr::Variable(var_name) = &**obj {
                     if symbols.classes.contains_key(var_name) && !symbols.locals.contains_key(var_name) && !symbols.variables.contains_key(var_name) {
@@ -304,9 +339,14 @@ impl Emitter {
 
     pub fn emit_stmt(&mut self, stmt: &Stmt, symbols: &mut SymbolTable) {
         match stmt {
-            Stmt::VarDecl(name, _type, expr) => {
+            Stmt::VarDecl(name, decl_type, expr) => {
                 self.emit_expr(expr, symbols); // Push value
                 
+                // Track declared type for List method dispatch
+                if let Some(t) = decl_type {
+                    symbols.variable_types.insert(name.clone(), t.clone());
+                }
+
                 // Assign index
                 let index = symbols.next_var_index;
                 symbols.variables.insert(name.clone(), index);
@@ -398,9 +438,22 @@ impl Emitter {
                 self.patch_jump(exit_jump);
             }
             Stmt::Expression(expr) => {
+                // Check if this is a void List operation (add/set) — these push nothing, skip POP.
+                let is_void_list_op = if let Expr::MethodCall(obj, method_name, args) = expr {
+                    if let Expr::Variable(var_name) = &**obj {
+                        if matches!(symbols.variable_types.get(var_name), Some(crate::ast::Type::List)) {
+                            matches!(
+                                (method_name.as_str(), args.len()),
+                                ("add", 1) | ("set", 2)
+                            )
+                        } else { false }
+                    } else { false }
+                } else { false };
+
                 self.emit_expr(expr, symbols);
-                // An expression used as a statement should have its result popped.
-                self.emit_byte(OpCode::Pop.into());
+                if !is_void_list_op {
+                    self.emit_byte(OpCode::Pop.into());
+                }
             }
             Stmt::Function(name, params, body, _, _is_static) => {
                 // 1. Jump over the function body so it doesn't execute linearly

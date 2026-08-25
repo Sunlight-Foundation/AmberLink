@@ -76,19 +76,9 @@ impl Parser {
                         _ => panic!("Invalid assignment target. Only variables, array elements, and fields can be assigned."),
                     }
                 } else {
-                    // Check if it's a ListAdd statement (which is an expression used as statement)
-                    if let Expr::MethodCall(obj, method, args) = &expr {
-                        if method == "add" && args.len() == 1 {
-                             // Convert to Stmt::ListAdd
-                             let stmt = Stmt::ListAdd(obj.clone(), args[0].clone());
-                             self.consume_semicolon();
-                             return stmt;
-                        } else if method == "set" && args.len() == 2 {
-                             let stmt = Stmt::ListSet(obj.clone(), Box::new(args[0].clone()), args[1].clone());
-                             self.consume_semicolon();
-                             return stmt;
-                        }
-                    }
+                    // NOTE: ListAdd/ListSet are no longer hijacked here by method name alone.
+                    // Doing so broke any class method named 'add' or 'set'.
+                    // List.add / List.set are handled in the emitter when the receiver is a List.
 
                     self.consume_semicolon(); // Consume ;
                     Stmt::Expression(expr)

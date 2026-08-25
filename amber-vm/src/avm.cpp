@@ -479,10 +479,10 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
                     
                     if (val.type == ValueType::STRING_CONST) {
                         size_t idx = val.as.str_idx;
-                        if (idx < constants.size()) std::cout << "Amber Out: " << constants[idx] << std::endl;
-                        else std::cout << "Amber Out: <Invalid String Index>" << std::endl;
+                        if (idx < constants.size()) std::cout << constants[idx] << std::endl;
+                        else std::cout << "<Invalid String Index>" << std::endl;
                     } else {
-                        std::cout << "Amber Out: " << val << std::endl;
+                        std::cout << val << std::endl;
                     }
                     break;
                 }
