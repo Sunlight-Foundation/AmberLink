@@ -25,7 +25,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 
 ---
 
-## Phase 3 — Object-Oriented Programming (v0.5–0.6) ✅
+## Phase 3 — Object-Oriented Programming (v0.6) ✅
 *The "Modern" milestone — full OOP support.*
 
 - [x] Classes, fields, instantiation (`new MyClass()`)
