@@ -45,7 +45,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 - [ ] **Standard Library** — string manipulation, math, file I/O, HashMap, LinkedList, basic networking
 - [ ] **Module system** — `import` statements, multi-file projects
 - [ ] **Amberlink Archive (`.ama`)** — packaged bytecode + resources, like Java JARs
-- [ ] **CLI (`Amberlink.py`)** — improved error handling, project scaffolding, watch mode
+- [ ] **CLI (`make`)** — improved error handling, project scaffolding, watch mode
 - [ ] **Compiler improvements** — descriptive error messages with line numbers, type checking in `semant.rs`, IR design
 - [ ] **Language Server (LSP)** — autocompletion and error highlighting for VS Code / IntelliJ
 - [ ] **Debugger** — step through code, inspect variables, view the stack
