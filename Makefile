@@ -5,13 +5,24 @@
 #   make run file=X    - Compile and run (or just run .amc)
 #   make clean         - Remove build artifacts
 
-# OS detection
+# OS & Shell detection
 ifeq ($(OS),Windows_NT)
     EXE := .exe
-    CP  := copy
+    # Check if Make is running inside CMD/PowerShell vs a Unix shell (Bash/Git Bash/MSYS)
+    ifeq ($(findstring sh,$(SHELL)),)
+        MKDIR = @if not exist "$(1)" mkdir "$(1)"
+        COPY  = @copy "$(1)" "$(2)" >nul
+        RMDIR = @if exist "$(1)" rmdir /s /q "$(1)"
+    else
+        MKDIR = @mkdir -p "$(1)"
+        COPY  = @cp "$(1)" "$(2)"
+        RMDIR = @rm -rf "$(1)"
+    endif
 else
     EXE :=
-    CP  := cp
+    MKDIR = @mkdir -p "$(1)"
+    COPY  = @cp "$(1)" "$(2)"
+    RMDIR = @rm -rf "$(1)"
 endif
 
 # Paths
@@ -32,28 +43,30 @@ init: $(COMPILER) $(VM)
 $(COMPILER):
 	@echo "Compiling Rust Core..."
 	cd $(CORE_DIR) && cargo build --release
-	@mkdir -p $(BIN_DIR)
-	$(CP) $(RUST_BIN) $(COMPILER)
+	$(call MKDIR,$(BIN_DIR))
+	$(call COPY,$(RUST_BIN),$(COMPILER))
 
 $(VM):
 	@echo "Compiling C++ VM..."
-	@mkdir -p $(BUILD_DIR)
+	$(call MKDIR,$(BUILD_DIR))
 	cd $(BUILD_DIR) && cmake .. && cmake --build . --config Release
-	@mkdir -p $(BIN_DIR)
-	$(CP) $(BUILD_DIR)/avm$(EXE) $(VM)
+	$(call MKDIR,$(BIN_DIR))
+	$(call COPY,$(BUILD_DIR)/avm$(EXE),$(VM))
 
 build: $(COMPILER)
 	$(COMPILER) $(file)
 
+# .amb files: compile then run; .amc files: run directly
+AMB_SRC := $(filter %.amb,$(file))
 run: $(COMPILER) $(VM)
-	@if echo "$(file)" | grep -q '\.amb$$'; then \
-		$(COMPILER) $(file) || exit 1; \
-		$(VM) $$(echo $(file) | sed 's/\.amb$$/.amc/'); \
-	else \
-		$(VM) $(file); \
-	fi
+ifdef AMB_SRC
+	$(COMPILER) $(file)
+	$(VM) $(subst .amb,.amc,$(file))
+else
+	$(VM) $(file)
+endif
 
 clean:
 	cd $(CORE_DIR) && cargo clean
-	rm -rf $(BUILD_DIR)
-	rm -rf $(BIN_DIR)
+	$(call RMDIR,$(BUILD_DIR))
+	$(call RMDIR,$(BIN_DIR))

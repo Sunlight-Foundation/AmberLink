@@ -41,7 +41,7 @@ make build file=main.amb
 
 Run it:
 ```bash
-make run file=main.amb
+make run file=main.amc
 ```
 
 Or run pre-compiled bytecode directly:
@@ -69,6 +69,6 @@ See [roadmap.md](roadmap.md) for the full development plan.
 
 ## License
 
-MIT — do what you want, just don't be weird about it.
+GNU General Public License v3.0 (GPL-3.0) — see the [LICENSE](LICENSE) file for the full text.
 
 *Part of the [Sunlight Foundation](https://github.com/Sunlight-Foundation)*
