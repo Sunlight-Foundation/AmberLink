@@ -11,10 +11,11 @@ pub struct Emitter {
     pub code: Vec<u8>,
     pub constants: Vec<String>,
     pub calls_to_patch: Vec<(usize, String)>, // (Bytecode Index, Function Name)
+    pub current_class: Option<String>,
 }
 
 impl Emitter {
-    pub fn new() -> Self { Self { code: Vec::new(), constants: Vec::new(), calls_to_patch: Vec::new() } }
+    pub fn new() -> Self { Self { code: Vec::new(), constants: Vec::new(), calls_to_patch: Vec::new(), current_class: None } }
 
     pub fn emit_byte(&mut self, b: u8) { self.code.push(b); }
     pub fn emit_int(&mut self, val: i32) {
@@ -97,6 +98,21 @@ impl Emitter {
                 }
             }
             Expr::GetField(obj_expr, field_name) => {
+                // Check for static field access (ClassName.field_name)
+                if let Expr::Variable(var_name) = &**obj_expr {
+                    if symbols.classes.contains_key(var_name) && !symbols.locals.contains_key(var_name) && !symbols.variables.contains_key(var_name) {
+                        if let Some(class_info) = symbols.classes.get(var_name) {
+                            if let Some(global_idx) = class_info.static_fields.get(field_name) {
+                                self.emit_byte(OpCode::LoadGlobal.into());
+                                self.emit_int(*global_idx as i32);
+                                return;
+                            } else {
+                                panic!("Static field '{}' not found in class '{}'", field_name, var_name);
+                            }
+                        }
+                    }
+                }
+
                 self.emit_expr(obj_expr, symbols); // Push object ref
                 
                 // Hack: Find field index by looking at all classes (since we don't track types yet)
@@ -108,7 +124,10 @@ impl Emitter {
 
                 // FIXME: no type tracking
                 for cls in classes {
-                    if let Some((idx, _)) = cls.fields.get(field_name) {
+                    if let Some((idx, vis)) = cls.fields.get(field_name) {
+                        if *vis == crate::ast::Visibility::Private && self.current_class.as_deref() != Some(cls.name.as_str()) {
+                            panic!("Cannot access private field '{}' of class '{}'", field_name, cls.name);
+                        }
                         field_idx = Some(*idx);
                         break;
                     }
@@ -119,30 +138,80 @@ impl Emitter {
                 self.emit_int(idx as i32);
             }
             Expr::MethodCall(obj, method_name, args) => {
-                self.emit_expr(obj, symbols); // 1. Push Object (this)
+                let mut is_static_call = false;
+                if let Expr::Variable(var_name) = &**obj {
+                    if symbols.classes.contains_key(var_name) && !symbols.locals.contains_key(var_name) && !symbols.variables.contains_key(var_name) {
+                        is_static_call = true;
+                    }
+                }
+
+                if !is_static_call {
+                    self.emit_expr(obj, symbols); // 1. Push Object (this)
+                }
+
                 for arg in args {
                     self.emit_expr(arg, symbols); // 2. Push Args
                 }
 
-                // Find which class has this method
+                // Find which class has this method (walk parent chain for inheritance)
                 let mut found_class = None;
                 // Sort classes to ensure deterministic compilation in case of name collisions
                 let mut classes: Vec<_> = symbols.classes.values().collect();
                 classes.sort_by_key(|c| &c.name);
 
-                for cls in classes {
-                    if cls.methods.contains_key(method_name) {
+                for cls in &classes {
+                    if cls.methods.iter().any(|ms| ms.name == *method_name) {
                         found_class = Some(cls.name.clone());
                         break;
                     }
                 }
+
+                // If not found directly, walk parent chains
+                if found_class.is_none() {
+                    for cls in &classes {
+                        let mut current = Some(cls.name.clone());
+                        while let Some(ref cname) = current {
+                            if let Some(ci) = symbols.classes.get(cname) {
+                                if ci.methods.iter().any(|ms| ms.name == *method_name) {
+                                    found_class = Some(ci.name.clone());
+                                    break;
+                                }
+                                current = ci.parent.clone();
+                            } else {
+                                break;
+                            }
+                        }
+                        if found_class.is_some() { break; }
+                    }
+                }
+
                 let class_name = found_class.expect(&format!("Method '{}' not found in any known class", method_name));
-                let full_name = format!("{}_{}", class_name, method_name);
+                
+                // Resolve overloaded method by matching arg count
+                let class_info = symbols.classes.get(&class_name)
+                    .expect(&format!("Class '{}' not found", class_name));
+                let matching: Vec<_> = class_info.methods.iter()
+                    .filter(|ms| ms.name == *method_name && ms.param_types.len() == args.len() && ms.is_static == is_static_call)
+                    .collect();
+                let method_sig = if matching.len() == 1 {
+                    &matching[0]
+                } else if matching.is_empty() {
+                    panic!("No matching overload for method '{}' with {} args (static: {})", method_name, args.len(), is_static_call)
+                } else {
+                    // Multiple matches with same arg count — pick first (type matching not implemented yet)
+                    &matching[0]
+                };
+
+                if method_sig.visibility == crate::ast::Visibility::Private && self.current_class.as_deref() != Some(class_name.as_str()) {
+                    panic!("Cannot access private method '{}' of class '{}'", method_name, class_name);
+                }
+
+                let full_name = method_sig.mangled_name.clone();
 
                 self.emit_byte(OpCode::Call.into());
                 self.calls_to_patch.push((self.code.len(), full_name));
                 self.emit_int(0);
-                self.emit_byte((args.len() + 1) as u8); // +1 for 'this'
+                self.emit_byte((args.len() + if is_static_call { 0 } else { 1 }) as u8); // +1 for 'this' if not static
             }
             Expr::ArrayAccess(name, index) => {
                 // Load array ref
@@ -333,7 +402,7 @@ impl Emitter {
                 // An expression used as a statement should have its result popped.
                 self.emit_byte(OpCode::Pop.into());
             }
-            Stmt::Function(name, params, body, _) => {
+            Stmt::Function(name, params, body, _, _is_static) => {
                 // 1. Jump over the function body so it doesn't execute linearly
                 let jump_over = self.emit_jump(OpCode::Jump.into());
 
@@ -366,34 +435,117 @@ impl Emitter {
                 symbols.locals = old_locals;
                 symbols.next_local_index = old_local_index;
             }
-            Stmt::Class(name, fields, methods) => {
-                // Register class in symbol table
+            Stmt::Class(name, parent, fields, methods, implements) => {
+                // Build field map, separating instance and static fields
                 let mut field_map = HashMap::new();
-                for (i, (f, _, vis)) in fields.iter().enumerate() {
-                    field_map.insert(f.clone(), (i as u32, vis.clone()));
+                let mut static_field_map = HashMap::new();
+
+                // If there's a parent, inherit its fields first
+                let mut instance_idx = 0u32;
+                if let Some(parent_name) = parent {
+                    if let Some(parent_info) = symbols.classes.get(parent_name).cloned() {
+                        // Copy parent instance fields
+                        for (fname, (idx, vis)) in &parent_info.fields {
+                            field_map.insert(fname.clone(), (*idx, vis.clone()));
+                            if *idx >= instance_idx { instance_idx = *idx + 1; }
+                        }
+                        // Copy parent static fields
+                        for (fname, idx) in &parent_info.static_fields {
+                            static_field_map.insert(fname.clone(), *idx);
+                        }
+                    } else {
+                        panic!("Parent class '{}' not found for class '{}'", parent_name, name);
+                    }
+                }
+
+                for (f, _, vis, is_static) in fields.iter() {
+                    if *is_static {
+                        // Static fields are stored as globals
+                        let global_idx = symbols.next_var_index;
+                        symbols.next_var_index += 1;
+                        static_field_map.insert(f.clone(), global_idx);
+                    } else {
+                        field_map.insert(f.clone(), (instance_idx, vis.clone()));
+                        instance_idx += 1;
+                    }
                 }
                 
-                let mut method_map = HashMap::new();
+                let mut method_sigs: Vec<crate::semant::MethodSignature> = Vec::new();
+                let mut static_method_names = Vec::new();
                 for m in methods {
-                    if let Stmt::Function(fname, _, _, vis) = m {
-                        // fname is "Class_Method", strip prefix to get "Method"
+                    if let Stmt::Function(fname, params, _, vis, is_static) = m {
                         let short_name = fname.strip_prefix(&format!("{}_", name)).unwrap_or(fname);
-                        method_map.insert(short_name.to_string(), vis.clone());
+                        // Extract base method name (strip type suffix for display)
+                        let base_name = short_name.split('_').next().unwrap_or(short_name).to_string();
+                        let param_types: Vec<crate::ast::Type> = params.iter()
+                            .filter(|(n, _)| n != "this")
+                            .map(|(_, t)| t.clone())
+                            .collect();
+                        method_sigs.push(crate::semant::MethodSignature {
+                            name: base_name.clone(),
+                            param_types,
+                            visibility: vis.clone(),
+                            is_static: *is_static,
+                            mangled_name: fname.clone(),
+                        });
+                        if *is_static {
+                            static_method_names.push(short_name.to_string());
+                        }
+                    }
+                }
+
+                // Verify interface implementations
+                for iface_name in implements {
+                    if let Some(iface_info) = symbols.interfaces.get(iface_name) {
+                        for (method_name, _, _) in &iface_info.method_signatures {
+                            if !method_sigs.iter().any(|ms| ms.name == *method_name) {
+                                panic!("Class '{}' does not implement method '{}' required by interface '{}'",
+                                    name, method_name, iface_name);
+                            }
+                        }
+                    } else {
+                        panic!("Interface '{}' not found", iface_name);
                     }
                 }
 
                 symbols.classes.insert(name.clone(), ClassInfo {
                     name: name.clone(),
                     fields: field_map,
-                    methods: method_map,
+                    methods: method_sigs,
+                    static_fields: static_field_map,
+                    static_methods: static_method_names,
+                    parent: parent.clone(),
                 });
 
                 // Emit methods
+                let old_class = self.current_class.clone();
+                self.current_class = Some(name.clone());
                 for method in methods {
                     self.emit_stmt(&method, symbols);
                 }
+                self.current_class = old_class;
             }
             Stmt::FieldSet(obj, field, value) => {
+                // Check for static field set (ClassName.field_name = value)
+                if let Expr::Variable(var_name) = &**obj {
+                    let mut is_static_global_idx = None;
+                    if symbols.classes.contains_key(var_name) && !symbols.locals.contains_key(var_name) && !symbols.variables.contains_key(var_name) {
+                        if let Some(class_info) = symbols.classes.get(var_name) {
+                            if let Some(global_idx) = class_info.static_fields.get(field) {
+                                is_static_global_idx = Some(*global_idx);
+                            } else {
+                                panic!("Static field '{}' not found in class '{}'", field, var_name);
+                            }
+                        }
+                    }
+                    if let Some(global_idx) = is_static_global_idx {
+                        self.emit_expr(value, symbols); // Push value to assign
+                        self.emit_byte(OpCode::StoreGlobal.into());
+                        self.emit_int(global_idx as i32);
+                        return;
+                    }
+                }
+
                 self.emit_expr(obj, symbols);   // Push object ref
                 self.emit_expr(value, symbols); // Push value to assign
                 
@@ -401,7 +553,10 @@ impl Emitter {
                 let mut field_idx = None;
                 // FIXME: no type tracking
                 for cls in symbols.classes.values() {
-                    if let Some((idx, _)) = cls.fields.get(field) {
+                    if let Some((idx, vis)) = cls.fields.get(field) {
+                        if *vis == crate::ast::Visibility::Private && self.current_class.as_deref() != Some(cls.name.as_str()) {
+                            panic!("Cannot access private field '{}' of class '{}'", field, cls.name);
+                        }
                         field_idx = Some(*idx);
                         break;
                     }
@@ -410,6 +565,13 @@ impl Emitter {
                 
                 self.emit_byte(OpCode::SetField.into());
                 self.emit_int(idx as i32);
+            }
+            Stmt::Interface(name, signatures) => {
+                // Interfaces are compile-time only — no bytecode emitted
+                symbols.interfaces.insert(name.clone(), crate::semant::InterfaceInfo {
+                    name: name.clone(),
+                    method_signatures: signatures.clone(),
+                });
             }
         }
     }

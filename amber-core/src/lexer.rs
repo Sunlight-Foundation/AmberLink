@@ -7,13 +7,14 @@ pub enum Token {
     New, Init,
     If, Else, While, For,
     Public, Private, Protected,
+    Static, Extends, Interface, Implements,
     True, False, // Boolean literals
     Identifier(String),
     Number(i64),
     FloatLit(String), // Keep as string to parse later or f64
     CharLit(char),
     StringLit(String),
-    Equals, Plus, Minus, Star, Slash, Comma, Dot, LessThan, GreaterThan, Semicolon,
+    Equals, DoubleEquals, NotEquals, Plus, Minus, Star, Slash, Comma, Dot, LessThan, GreaterThan, Semicolon,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Newline,
     EOF,
@@ -115,6 +116,10 @@ impl Lexer {
             "public" => Token::Public,
             "private" => Token::Private,
             "protected" => Token::Protected,
+            "static" => Token::Static,
+            "extends" => Token::Extends,
+            "interface" => Token::Interface,
+            "implements" => Token::Implements,
             _ => Token::Identifier(text),
         }
     }

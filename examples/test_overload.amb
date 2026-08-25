@@ -1,0 +1,21 @@
+class MathHelper {
+    void printSum(int a, int b) {
+        print "Sum of ints:"
+        print a + b
+    }
+
+    void printSum(float a, float b) {
+        print "Sum of floats:"
+        print a + b
+    }
+    
+    void printSum(int a) {
+        print "Sum of int with itself:"
+        print a + a
+    }
+}
+
+var m = new MathHelper()
+m.printSum(5, 10)
+m.printSum(5.5, 2.0)
+m.printSum(100)

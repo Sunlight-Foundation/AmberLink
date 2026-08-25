@@ -1,0 +1,17 @@
+class Utils {
+    static int counter;
+
+    static void increment() {
+        Utils.counter = Utils.counter + 1;
+    }
+
+    static void printCounter() {
+        print "Counter is:";
+        print Utils.counter;
+    }
+}
+
+Utils.counter = 0;
+Utils.increment();
+Utils.increment();
+Utils.printCounter();

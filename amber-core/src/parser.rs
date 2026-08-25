@@ -52,6 +52,7 @@ impl Parser {
             Token::For => self.parse_for(symbols),
             Token::LBrace => self.parse_block(symbols),
             Token::Class => self.parse_class_decl(symbols),
+            Token::Interface => self.parse_interface_decl(),
             Token::Return => self.parse_return(),
             Token::Print => self.parse_print(),
             // Token::Func is deprecated in favor of C-style types
@@ -319,7 +320,7 @@ impl Parser {
         symbols.locals = old_locals;
         symbols.next_local_index = old_local_index;
 
-        Stmt::Function(name, params, body, crate::ast::Visibility::Public)
+        Stmt::Function(name, params, body, crate::ast::Visibility::Public, false)
     }
 
     fn parse_class_decl(&mut self, symbols: &mut SymbolTable) -> Stmt {
@@ -328,6 +329,30 @@ impl Parser {
             Token::Identifier(n) => n,
             _ => panic!("Expected class name"),
         };
+
+        // Optional: extends ParentClass
+        let parent = if self.peek() == Token::Extends {
+            self.advance(); // consume 'extends'
+            match self.advance() {
+                Token::Identifier(p) => Some(p),
+                _ => panic!("Expected parent class name after 'extends'"),
+            }
+        } else {
+            None
+        };
+
+        // Optional: implements Interface1, Interface2, ...
+        let mut implements = Vec::new();
+        if self.peek() == Token::Implements {
+            self.advance(); // consume 'implements'
+            loop {
+                match self.advance() {
+                    Token::Identifier(iface) => implements.push(iface),
+                    _ => panic!("Expected interface name after 'implements'"),
+                }
+                if self.peek() == Token::Comma { self.advance(); } else { break; }
+            }
+        }
 
         if self.advance() != Token::LBrace { panic!("Expected '{{' after class name"); }
 
@@ -346,34 +371,39 @@ impl Parser {
                     _ => unreachable!(),
                 };
             }
+
+            // Check for 'static' modifier
+            let is_static = if self.peek() == Token::Static {
+                self.advance(); // consume 'static'
+                true
+            } else {
+                false
+            };
             
             // Lookahead: Type -> Name. If next is '(', it's a method. Else field.
             if self.peek() == Token::Init {
                 methods.push(self.parse_constructor(symbols, &name, vis));
             } else if matches!(self.peek_n(1), Token::Identifier(_)) && self.peek_n(2) == Token::LParen {
-                methods.push(self.parse_method(symbols, &name, vis));
+                methods.push(self.parse_method(symbols, &name, vis, is_static));
             } else {
                 // Parse field
                 let field_type = self.parse_type();
                 let field_name = match self.advance() { Token::Identifier(n) => n, _ => panic!("Expected field name") };
                 self.consume_semicolon(); // Consume ; after field decl
-                fields.push((field_name, field_type, vis));
+                fields.push((field_name, field_type, vis, is_static));
             }
         }
         if self.advance() != Token::RBrace { panic!("Expected '}}' after class body"); }
 
-        Stmt::Class(name, fields, methods)
+        Stmt::Class(name, parent, fields, methods, implements)
     }
 
-    fn parse_method(&mut self, symbols: &mut SymbolTable, class_name: &str, vis: crate::ast::Visibility) -> Stmt {
+    fn parse_method(&mut self, symbols: &mut SymbolTable, class_name: &str, vis: crate::ast::Visibility, is_static: bool) -> Stmt {
         let _return_type = self.parse_type();
         
         let name_token = self.advance();
         let method_name = match name_token { Token::Identifier(n) => n, _ => panic!("Expected method name") };
         
-        // Mangle name: Class_Method
-        let full_name = format!("{}_{}", class_name, method_name);
-
         // Parse Parameters
         if self.advance() != Token::LParen { panic!("Expected '(' after method name"); }
         let mut params: Vec<(String, Type)> = Vec::new();
@@ -390,6 +420,26 @@ impl Parser {
         }
         if self.advance() != Token::RParen { panic!("Expected ')' after parameters"); }
 
+        // Build type suffix for overloading: e.g. "_int_String"
+        let type_suffix: String = params.iter()
+            .map(|(_, t)| format!("{}", match t {
+                Type::Int => "int",
+                Type::Float => "float",
+                Type::Bool => "bool",
+                Type::Char => "char",
+                Type::String => "String",
+                Type::Void => "void",
+                Type::List => "List",
+                Type::Class(name) => name.as_str(),
+            }))
+            .collect::<Vec<_>>()
+            .join("_");
+        let full_name = if type_suffix.is_empty() {
+            format!("{}_{}", class_name, method_name)
+        } else {
+            format!("{}_{}_{}", class_name, method_name, type_suffix)
+        };
+
         // Register function
         symbols.functions.insert(full_name.clone(), crate::semant::FunctionInfo {
             name: full_name.clone(),
@@ -402,11 +452,13 @@ impl Parser {
         symbols.locals.clear();
         symbols.next_local_index = 0;
 
-        // 1. Inject 'this' as the first local variable (index 0)
-        symbols.locals.insert("this".to_string(), symbols.next_local_index);
-        symbols.next_local_index += 1;
+        if !is_static {
+            // Inject 'this' as the first local variable (index 0)
+            symbols.locals.insert("this".to_string(), symbols.next_local_index);
+            symbols.next_local_index += 1;
+        }
 
-        // 2. Register other parameters
+        // Register other parameters
         for (param_name, _) in &params {
             symbols.locals.insert(param_name.clone(), symbols.next_local_index);
             symbols.next_local_index += 1;
@@ -418,10 +470,12 @@ impl Parser {
         symbols.locals = old_locals;
         symbols.next_local_index = old_local_index;
 
-        // Prepend 'this' to params for the AST so the Emitter knows it's a local variable
-        params.insert(0, ("this".to_string(), Type::Class(class_name.to_string())));
+        if !is_static {
+            // Prepend 'this' to params for the AST so the Emitter knows it's a local variable
+            params.insert(0, ("this".to_string(), Type::Class(class_name.to_string())));
+        }
 
-        Stmt::Function(full_name, params, body, vis)
+        Stmt::Function(full_name, params, body, vis, is_static)
     }
 
     fn parse_constructor(&mut self, symbols: &mut SymbolTable, class_name: &str, vis: crate::ast::Visibility) -> Stmt {
@@ -473,7 +527,48 @@ impl Parser {
 
         params.insert(0, ("this".to_string(), Type::Class(class_name.to_string())));
 
-        Stmt::Function(full_name, params, body, vis)
+        Stmt::Function(full_name, params, body, vis, false)
+    }
+
+    fn parse_interface_decl(&mut self) -> Stmt {
+        self.advance(); // consume 'interface'
+        let name = match self.advance() {
+            Token::Identifier(n) => n,
+            _ => panic!("Expected interface name"),
+        };
+
+        if self.advance() != Token::LBrace { panic!("Expected '{{' after interface name"); }
+
+        let mut signatures = Vec::new();
+        while !self.is_at_end() && self.peek() != Token::RBrace {
+            if self.peek() == Token::Newline { self.advance(); continue; }
+
+            let return_type = self.parse_type();
+            let method_name = match self.advance() {
+                Token::Identifier(n) => n,
+                _ => panic!("Expected method name in interface"),
+            };
+
+            if self.advance() != Token::LParen { panic!("Expected '(' after method name in interface"); }
+            let mut params: Vec<(String, Type)> = Vec::new();
+            if self.peek() != Token::RParen {
+                loop {
+                    let param_type = self.parse_type();
+                    match self.advance() {
+                        Token::Identifier(param_name) => params.push((param_name, param_type)),
+                        _ => panic!("Expected parameter name in interface method"),
+                    }
+                    if self.peek() == Token::Comma { self.advance(); } else { break; }
+                }
+            }
+            if self.advance() != Token::RParen { panic!("Expected ')' after interface method params"); }
+            self.consume_semicolon();
+
+            signatures.push((method_name, return_type, params));
+        }
+        if self.advance() != Token::RBrace { panic!("Expected '}}' after interface body"); }
+
+        Stmt::Interface(name, signatures)
     }
 
     fn parse_declaration(&mut self, explicit_type: Option<Type>) -> Stmt {
