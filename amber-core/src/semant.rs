@@ -10,8 +10,8 @@ pub struct FunctionInfo {
 #[derive(Clone)]
 pub struct ClassInfo {
     pub name: String,
-    pub fields: HashMap<String, u32>, // Field Name -> Index
-    pub methods: Vec<String>, // List of method names
+    pub fields: HashMap<String, (u32, crate::ast::Visibility)>, // Field Name -> (Index, Visibility)
+    pub methods: HashMap<String, crate::ast::Visibility>, // Method name -> Visibility
 }
 
 pub struct SymbolTable {

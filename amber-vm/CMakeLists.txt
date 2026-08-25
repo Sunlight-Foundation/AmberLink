@@ -5,6 +5,11 @@ set(CMAKE_CXX_STANDARD 17)
 
 include_directories(include)
 
-file(GLOB SOURCES "src/*.cpp")
-
-add_executable(avm ${SOURCES})
+add_executable(avm
+    src/avm.cpp
+    src/heap.cpp
+    src/loader.cpp
+    src/main.cpp
+    src/memory.cpp
+    src/roots.cpp
+)

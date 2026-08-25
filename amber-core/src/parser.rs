@@ -319,7 +319,7 @@ impl Parser {
         symbols.locals = old_locals;
         symbols.next_local_index = old_local_index;
 
-        Stmt::Function(name, params, body)
+        Stmt::Function(name, params, body, crate::ast::Visibility::Public)
     }
 
     fn parse_class_decl(&mut self, symbols: &mut SymbolTable) -> Stmt {
@@ -337,15 +337,27 @@ impl Parser {
         while !self.is_at_end() && self.peek() != Token::RBrace {
             if self.peek() == Token::Newline { self.advance(); continue; }
             
+            let mut vis = crate::ast::Visibility::Public;
+            if matches!(self.peek(), Token::Public | Token::Private | Token::Protected) {
+                vis = match self.advance() {
+                    Token::Public => crate::ast::Visibility::Public,
+                    Token::Private => crate::ast::Visibility::Private,
+                    Token::Protected => crate::ast::Visibility::Protected,
+                    _ => unreachable!(),
+                };
+            }
+            
             // Lookahead: Type -> Name. If next is '(', it's a method. Else field.
-            if matches!(self.peek_n(1), Token::Identifier(_)) && self.peek_n(2) == Token::LParen {
-                methods.push(self.parse_method(symbols, &name));
+            if self.peek() == Token::Init {
+                methods.push(self.parse_constructor(symbols, &name, vis));
+            } else if matches!(self.peek_n(1), Token::Identifier(_)) && self.peek_n(2) == Token::LParen {
+                methods.push(self.parse_method(symbols, &name, vis));
             } else {
                 // Parse field
                 let field_type = self.parse_type();
                 let field_name = match self.advance() { Token::Identifier(n) => n, _ => panic!("Expected field name") };
                 self.consume_semicolon(); // Consume ; after field decl
-                fields.push((field_name, field_type));
+                fields.push((field_name, field_type, vis));
             }
         }
         if self.advance() != Token::RBrace { panic!("Expected '}}' after class body"); }
@@ -353,7 +365,7 @@ impl Parser {
         Stmt::Class(name, fields, methods)
     }
 
-    fn parse_method(&mut self, symbols: &mut SymbolTable, class_name: &str) -> Stmt {
+    fn parse_method(&mut self, symbols: &mut SymbolTable, class_name: &str, vis: crate::ast::Visibility) -> Stmt {
         let _return_type = self.parse_type();
         
         let name_token = self.advance();
@@ -409,7 +421,59 @@ impl Parser {
         // Prepend 'this' to params for the AST so the Emitter knows it's a local variable
         params.insert(0, ("this".to_string(), Type::Class(class_name.to_string())));
 
-        Stmt::Function(full_name, params, body)
+        Stmt::Function(full_name, params, body, vis)
+    }
+
+    fn parse_constructor(&mut self, symbols: &mut SymbolTable, class_name: &str, vis: crate::ast::Visibility) -> Stmt {
+        self.advance(); // consume 'init'
+        
+        let full_name = format!("{}_init", class_name);
+
+        if self.advance() != Token::LParen { panic!("Expected '(' after init"); }
+        let mut params: Vec<(String, Type)> = Vec::new();
+        
+        if self.peek() != Token::RParen {
+            loop {
+                let param_type = self.parse_type();
+                match self.advance() {
+                    Token::Identifier(param_name) => params.push((param_name, param_type)),
+                    _ => panic!("Expected parameter name"),
+                }
+                if self.peek() == Token::Comma { self.advance(); } else { break; }
+            }
+        }
+        if self.advance() != Token::RParen { panic!("Expected ')' after parameters"); }
+
+        symbols.functions.insert(full_name.clone(), crate::semant::FunctionInfo {
+            name: full_name.clone(),
+            address: 0,
+        });
+
+        let old_locals = symbols.locals.clone();
+        let old_local_index = symbols.next_local_index;
+        symbols.locals.clear();
+        symbols.next_local_index = 0;
+
+        symbols.locals.insert("this".to_string(), symbols.next_local_index);
+        symbols.next_local_index += 1;
+
+        for (param_name, _) in &params {
+            symbols.locals.insert(param_name.clone(), symbols.next_local_index);
+            symbols.next_local_index += 1;
+        }
+
+        let body_stmt = self.parse_block(symbols);
+        let mut body = match body_stmt { Stmt::Block(stmts) => stmts, _ => vec![] };
+
+        // Append `return this;` to ensure NewInstance expression evaluates to the object
+        body.push(Stmt::Return(Expr::Variable("this".to_string())));
+
+        symbols.locals = old_locals;
+        symbols.next_local_index = old_local_index;
+
+        params.insert(0, ("this".to_string(), Type::Class(class_name.to_string())));
+
+        Stmt::Function(full_name, params, body, vis)
     }
 
     fn parse_declaration(&mut self, explicit_type: Option<Type>) -> Stmt {

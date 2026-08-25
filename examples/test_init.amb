@@ -1,0 +1,13 @@
+class Point {
+    int x;
+    int y;
+
+    init(int ax, int ay) {
+        this.x = ax;
+        this.y = ay;
+    }
+}
+
+var p = new Point(10, 20);
+print(p.x);
+print(p.y);

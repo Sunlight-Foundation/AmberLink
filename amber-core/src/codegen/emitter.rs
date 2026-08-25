@@ -85,12 +85,15 @@ impl Emitter {
                 self.emit_int(name_idx as i32);
                 self.emit_int(class_info.fields.len() as i32);
 
-                // TODO: Handle constructor arguments if any
-                // For now, we ignore args or assume default constructor
-                for arg in args {
-                     self.emit_expr(arg, symbols);
-                     // Pop them for now as we don't support constructors fully
-                     self.emit_byte(OpCode::Pop.into());
+                let init_name = format!("{}_init", class_name);
+                if symbols.functions.contains_key(&init_name) {
+                    for arg in args {
+                        self.emit_expr(arg, symbols);
+                    }
+                    self.emit_byte(OpCode::Call.into());
+                    self.calls_to_patch.push((self.code.len(), init_name));
+                    self.emit_int(0);
+                    self.emit_byte((args.len() + 1) as u8); // +1 for 'this'
                 }
             }
             Expr::GetField(obj_expr, field_name) => {
@@ -103,8 +106,9 @@ impl Emitter {
                 let mut classes: Vec<_> = symbols.classes.values().collect();
                 classes.sort_by_key(|c| &c.name);
 
+                // FIXME: no type tracking
                 for cls in classes {
-                    if let Some(idx) = cls.fields.get(field_name) {
+                    if let Some((idx, _)) = cls.fields.get(field_name) {
                         field_idx = Some(*idx);
                         break;
                     }
@@ -127,7 +131,7 @@ impl Emitter {
                 classes.sort_by_key(|c| &c.name);
 
                 for cls in classes {
-                    if cls.methods.contains(method_name) {
+                    if cls.methods.contains_key(method_name) {
                         found_class = Some(cls.name.clone());
                         break;
                     }
@@ -329,7 +333,7 @@ impl Emitter {
                 // An expression used as a statement should have its result popped.
                 self.emit_byte(OpCode::Pop.into());
             }
-            Stmt::Function(name, params, body) => {
+            Stmt::Function(name, params, body, _) => {
                 // 1. Jump over the function body so it doesn't execute linearly
                 let jump_over = self.emit_jump(OpCode::Jump.into());
 
@@ -365,23 +369,23 @@ impl Emitter {
             Stmt::Class(name, fields, methods) => {
                 // Register class in symbol table
                 let mut field_map = HashMap::new();
-                for (i, (f, _)) in fields.iter().enumerate() {
-                    field_map.insert(f.clone(), i as u32);
+                for (i, (f, _, vis)) in fields.iter().enumerate() {
+                    field_map.insert(f.clone(), (i as u32, vis.clone()));
                 }
                 
-                let mut method_names = Vec::new();
+                let mut method_map = HashMap::new();
                 for m in methods {
-                    if let Stmt::Function(fname, _, _) = m {
+                    if let Stmt::Function(fname, _, _, vis) = m {
                         // fname is "Class_Method", strip prefix to get "Method"
                         let short_name = fname.strip_prefix(&format!("{}_", name)).unwrap_or(fname);
-                        method_names.push(short_name.to_string());
+                        method_map.insert(short_name.to_string(), vis.clone());
                     }
                 }
 
                 symbols.classes.insert(name.clone(), ClassInfo {
                     name: name.clone(),
                     fields: field_map,
-                    methods: method_names,
+                    methods: method_map,
                 });
 
                 // Emit methods
@@ -395,8 +399,9 @@ impl Emitter {
                 
                 // Resolve field index
                 let mut field_idx = None;
+                // FIXME: no type tracking
                 for cls in symbols.classes.values() {
-                    if let Some(idx) = cls.fields.get(field) {
+                    if let Some((idx, _)) = cls.fields.get(field) {
                         field_idx = Some(*idx);
                         break;
                     }

@@ -453,7 +453,9 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
                     break;
                 }
                 case OP_RETURN: {
-                    if (call_stack.empty()) return; // Or halt
+                    if (call_stack.empty()) {
+                        throw std::runtime_error("RETURN with empty call stack.");
+                    }
                     
                     Value result = vm_stack.back(); vm_stack.pop_back();
                     

@@ -4,8 +4,9 @@
 pub enum Token {
     Var, Mut, Func, Class, Return, Print,
     Int, Void, String, Bool, Float, Char, List, // Types
-    New,
+    New, Init,
     If, Else, While, For,
+    Public, Private, Protected,
     True, False, // Boolean literals
     Identifier(String),
     Number(i64),
@@ -35,7 +36,20 @@ impl Lexer {
             match c {
                 ' ' | '\r' | '\t' => { self.pos += 1; }
                 '\n' => { tokens.push(Token::Newline); self.pos += 1; }
-                '=' => { tokens.push(Token::Equals); self.pos += 1; }
+                '=' => {
+                    if self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '=' {
+                        tokens.push(Token::DoubleEquals); self.pos += 2;
+                    } else {
+                        tokens.push(Token::Equals); self.pos += 1;
+                    }
+                }
+                '!' => {
+                    if self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '=' {
+                        tokens.push(Token::NotEquals); self.pos += 2;
+                    } else {
+                        self.pos += 1;
+                    }
+                }
                 '+' => { tokens.push(Token::Plus); self.pos += 1; }
                 '-' => { tokens.push(Token::Minus); self.pos += 1; }
                 '*' => { tokens.push(Token::Star); self.pos += 1; }
@@ -88,6 +102,7 @@ impl Lexer {
             "true" => Token::True,
             "false" => Token::False,
             "new" => Token::New,
+            "init" => Token::Init,
             "mut" => Token::Mut,
             "func" => Token::Func,
             "class" => Token::Class,
@@ -97,6 +112,9 @@ impl Lexer {
             "else" => Token::Else,
             "while" => Token::While,
             "for" => Token::For,
+            "public" => Token::Public,
+            "private" => Token::Private,
+            "protected" => Token::Protected,
             _ => Token::Identifier(text),
         }
     }

@@ -1,3 +1,8 @@
+#[derive(Debug, Clone, PartialEq)]
+pub enum Visibility {
+    Public, Private, Protected
+}
+
 #[derive(Debug, Clone)]
 pub enum Op {
     Add,
@@ -52,8 +57,8 @@ pub enum Stmt {
     If(Expr, Box<Stmt>, Option<Box<Stmt>>), // Condition, Then, Else
     While(Expr, Box<Stmt>),                 // Condition, Body
     Expression(Expr),
-    Function(String, Vec<(String, Type)>, Vec<Stmt>), // Name, Params, Body
-    Class(String, Vec<(String, Type)>, Vec<Stmt>), // Name, Fields, Methods
+    Function(String, Vec<(String, Type)>, Vec<Stmt>, Visibility), // Name, Params, Body, Visibility
+    Class(String, Vec<(String, Type, Visibility)>, Vec<Stmt>), // Name, Fields, Methods
     FieldSet(Box<Expr>, String, Expr), // Object, Field Name, Value
     // List Operations
     ListAdd(Box<Expr>, Expr), // List Expr, Value
