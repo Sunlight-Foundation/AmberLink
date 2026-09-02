@@ -1,0 +1,4 @@
+bool ok = writeFile("stdlib_test_out.txt", "file io works")
+print ok
+String data = readFile("stdlib_test_out.txt")
+print data

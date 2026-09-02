@@ -1,0 +1,28 @@
+// stdlib/core.amb
+// Core standard library: conversions and math helpers implemented as VM natives.
+// These functions are registered as built-ins and callable from any Amberlink
+// program (no import needed). This file documents and exercises them.
+
+// --- Conversions ---
+// toString(value) : String
+String repr = toString(42)
+// toInt(value) : int
+int n = toInt("42")
+// toFloat(value) : float
+float f = toFloat("3.14")
+// abs(value) : int|float
+int mag = abs(7)
+
+// --- Math ---
+// mathSqrt(value) : float
+float root = mathSqrt(16.0)
+// mathPow(base, exp) : float
+float power = mathPow(2.0, 10.0)
+
+// --- Timing ---
+// clock() : float  (seconds since VM start)
+float since_start = clock()
+// sleep(milliseconds) : void
+sleep(10)
+
+print toString(mag)
