@@ -58,6 +58,26 @@ void Heap::mark(AmberObject* obj, size_t constant_pool_size) {
                 }
             }
         }
+    } else if (obj->type == ObjType::HASH_MAP) {
+        HashMapObject* hm = static_cast<HashMapObject*>(obj);
+        for (const HashEntry& entry : hm->entries) {
+            if (entry.key.type == ValueType::OBJ_REF) {
+                size_t heap_idx = entry.key.as.obj_ref;
+                if (heap_idx < objects.size()) mark(objects[heap_idx], constant_pool_size);
+            }
+            if (entry.value.type == ValueType::OBJ_REF) {
+                size_t heap_idx = entry.value.as.obj_ref;
+                if (heap_idx < objects.size()) mark(objects[heap_idx], constant_pool_size);
+            }
+        }
+    } else if (obj->type == ObjType::LINKED_LIST) {
+        LinkedListObject* ll = static_cast<LinkedListObject*>(obj);
+        for (const Value& val : ll->items) {
+            if (val.type == ValueType::OBJ_REF) {
+                size_t heap_idx = val.as.obj_ref;
+                if (heap_idx < objects.size()) mark(objects[heap_idx], constant_pool_size);
+            }
+        }
     }
 }
 

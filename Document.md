@@ -1,4 +1,4 @@
-# 📄 Amberlink: Technical Specification (v0.6)
+# 📄 Amberlink: Technical Specification (v0.7)
 
 Amberlink is a high-performance, multi-paradigm programming language designed to bridge the gap between the safety of Java and the raw power of C++. It utilizes a unique Dual-Backend approach, allowing code to run either on a dedicated Virtual Machine (AVM) or as a native binary.
 

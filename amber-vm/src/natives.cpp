@@ -287,6 +287,186 @@ static Value native_mathPow(std::vector<Value>& args, std::vector<std::string>& 
     return Value(static_cast<float>(std::pow(b, e)));
 }
 
+// --- Collections: HashMap ---
+
+// Structural equality of two Values (by value, not by identity).
+static bool value_equal(const Value& a, const Value& b) {
+    if (a.type != b.type) return false;
+    switch (a.type) {
+        case ValueType::INT: return a.as.i == b.as.i;
+        case ValueType::FLOAT: return a.as.f == b.as.f;
+        case ValueType::BOOL: return a.as.b == b.as.b;
+        case ValueType::CHAR: return a.as.c == b.as.c;
+        case ValueType::STRING_CONST: return a.as.str_idx == b.as.str_idx;
+        case ValueType::OBJ_REF: return a.as.obj_ref == b.as.obj_ref;
+    }
+    return false;
+}
+
+// --- mapNew() : HashMap ---
+static Value native_mapNew(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)args; (void)constants;
+    HashMapObject* hm = new HashMapObject();
+    return Value::make_obj(heap.register_object(hm));
+}
+
+// --- mapPut(map, key, value) : void ---
+static Value native_mapPut(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants;
+    if (args.size() != 3) throw std::runtime_error("mapPut expects 3 arguments.");
+    if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapPut expects a HashMap.");
+    HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
+    if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapPut expects a HashMap.");
+    for (HashEntry& entry : hm->entries) {
+        if (value_equal(entry.key, args[1])) { entry.value = args[2]; return Value(); }
+    }
+    hm->entries.push_back(HashEntry(args[1], args[2]));
+    return Value();
+}
+
+// --- mapGet(map, key) : value ---
+// Returns the value for key, or a default (int 0) if the key is absent.
+static Value native_mapGet(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants;
+    if (args.size() != 2) throw std::runtime_error("mapGet expects 2 arguments.");
+    if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapGet expects a HashMap.");
+    HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
+    if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapGet expects a HashMap.");
+    for (const HashEntry& entry : hm->entries) {
+        if (value_equal(entry.key, args[1])) return entry.value;
+    }
+    return Value(); // absent key -> int 0
+}
+
+// --- mapContainsKey(map, key) : bool ---
+static Value native_mapContainsKey(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants;
+    if (args.size() != 2) throw std::runtime_error("mapContainsKey expects 2 arguments.");
+    if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapContainsKey expects a HashMap.");
+    HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
+    if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapContainsKey expects a HashMap.");
+    for (const HashEntry& entry : hm->entries) {
+        if (value_equal(entry.key, args[1])) return Value(true);
+    }
+    return Value(false);
+}
+
+// --- mapRemove(map, key) : void ---
+static Value native_mapRemove(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants;
+    if (args.size() != 2) throw std::runtime_error("mapRemove expects 2 arguments.");
+    if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapRemove expects a HashMap.");
+    HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
+    if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapRemove expects a HashMap.");
+    for (size_t i = 0; i < hm->entries.size(); ++i) {
+        if (value_equal(hm->entries[i].key, args[1])) {
+            hm->entries.erase(hm->entries.begin() + i);
+            break;
+        }
+    }
+    return Value();
+}
+
+// --- mapSize(map) : int ---
+static Value native_mapSize(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants;
+    if (args.size() != 1) throw std::runtime_error("mapSize expects 1 argument.");
+    if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapSize expects a HashMap.");
+    HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
+    if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapSize expects a HashMap.");
+    return Value(static_cast<int32_t>(hm->entries.size()));
+}
+
+// --- Collections: LinkedList ---
+
+// --- llNew() : LinkedList ---
+static Value native_llNew(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)args; (void)constants;
+    LinkedListObject* ll = new LinkedListObject();
+    return Value::make_obj(heap.register_object(ll));
+}
+
+// --- llAddFirst(ll, value) : void ---
+static Value native_llAddFirst(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants;
+    if (args.size() != 2) throw std::runtime_error("llAddFirst expects 2 arguments.");
+    if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("llAddFirst expects a LinkedList.");
+    LinkedListObject* ll = static_cast<LinkedListObject*>(heap.objects[args[0].as.obj_ref]);
+    if (!ll || ll->type != ObjType::LINKED_LIST) throw std::runtime_error("llAddFirst expects a LinkedList.");
+    ll->items.insert(ll->items.begin(), args[1]);
+    return Value();
+}
+
+// --- llAddLast(ll, value) : void ---
+static Value native_llAddLast(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants;
+    if (args.size() != 2) throw std::runtime_error("llAddLast expects 2 arguments.");
+    if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("llAddLast expects a LinkedList.");
+    LinkedListObject* ll = static_cast<LinkedListObject*>(heap.objects[args[0].as.obj_ref]);
+    if (!ll || ll->type != ObjType::LINKED_LIST) throw std::runtime_error("llAddLast expects a LinkedList.");
+    ll->items.push_back(args[1]);
+    return Value();
+}
+
+// --- llRemoveFirst(ll) : value ---
+static Value native_llRemoveFirst(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants;
+    if (args.size() != 1) throw std::runtime_error("llRemoveFirst expects 1 argument.");
+    if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("llRemoveFirst expects a LinkedList.");
+    LinkedListObject* ll = static_cast<LinkedListObject*>(heap.objects[args[0].as.obj_ref]);
+    if (!ll || ll->type != ObjType::LINKED_LIST) throw std::runtime_error("llRemoveFirst expects a LinkedList.");
+    if (ll->items.empty()) throw std::runtime_error("llRemoveFirst: empty list.");
+    Value front = ll->items.front();
+    ll->items.erase(ll->items.begin());
+    return front;
+}
+
+// --- llRemoveLast(ll) : value ---
+static Value native_llRemoveLast(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants;
+    if (args.size() != 1) throw std::runtime_error("llRemoveLast expects 1 argument.");
+    if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("llRemoveLast expects a LinkedList.");
+    LinkedListObject* ll = static_cast<LinkedListObject*>(heap.objects[args[0].as.obj_ref]);
+    if (!ll || ll->type != ObjType::LINKED_LIST) throw std::runtime_error("llRemoveLast expects a LinkedList.");
+    if (ll->items.empty()) throw std::runtime_error("llRemoveLast: empty list.");
+    Value back = ll->items.back();
+    ll->items.pop_back();
+    return back;
+}
+
+// --- llGet(ll, index) : value ---
+static Value native_llGet(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants;
+    if (args.size() != 2) throw std::runtime_error("llGet expects 2 arguments.");
+    if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("llGet expects a LinkedList.");
+    if (args[1].type != ValueType::INT) throw std::runtime_error("llGet expects an int index.");
+    LinkedListObject* ll = static_cast<LinkedListObject*>(heap.objects[args[0].as.obj_ref]);
+    if (!ll || ll->type != ObjType::LINKED_LIST) throw std::runtime_error("llGet expects a LinkedList.");
+    int32_t idx = args[1].as.i;
+    if (idx < 0 || idx >= static_cast<int32_t>(ll->items.size())) throw std::runtime_error("llGet: index out of range.");
+    return ll->items[idx];
+}
+
+// --- llSize(ll) : int ---
+static Value native_llSize(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants;
+    if (args.size() != 1) throw std::runtime_error("llSize expects 1 argument.");
+    if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("llSize expects a LinkedList.");
+    LinkedListObject* ll = static_cast<LinkedListObject*>(heap.objects[args[0].as.obj_ref]);
+    if (!ll || ll->type != ObjType::LINKED_LIST) throw std::runtime_error("llSize expects a LinkedList.");
+    return Value(static_cast<int32_t>(ll->items.size()));
+}
+
+// --- llEmpty(ll) : bool ---
+static Value native_llEmpty(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants;
+    if (args.size() != 1) throw std::runtime_error("llEmpty expects 1 argument.");
+    if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("llEmpty expects a LinkedList.");
+    LinkedListObject* ll = static_cast<LinkedListObject*>(heap.objects[args[0].as.obj_ref]);
+    if (!ll || ll->type != ObjType::LINKED_LIST) throw std::runtime_error("llEmpty expects a LinkedList.");
+    return Value(ll->items.empty());
+}
+
 std::vector<NativeEntry>& registry() {
     static std::vector<NativeEntry> reg = {
         {native_len, 1},
@@ -310,6 +490,20 @@ std::vector<NativeEntry>& registry() {
         {native_strToLower, 1},
         {native_mathSqrt, 1},
         {native_mathPow, 2},
+        {native_mapNew, 0},
+        {native_mapPut, 3},
+        {native_mapGet, 2},
+        {native_mapContainsKey, 2},
+        {native_mapRemove, 2},
+        {native_mapSize, 1},
+        {native_llNew, 0},
+        {native_llAddFirst, 2},
+        {native_llAddLast, 2},
+        {native_llRemoveFirst, 1},
+        {native_llRemoveLast, 1},
+        {native_llGet, 2},
+        {native_llSize, 1},
+        {native_llEmpty, 1},
     };
     return reg;
 }

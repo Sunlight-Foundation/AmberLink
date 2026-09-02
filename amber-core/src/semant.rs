@@ -101,6 +101,21 @@ impl SymbolTable {
         register("strToLower", 18, Type::String, vec![Type::String]);
         register("mathSqrt", 19, Type::Float, vec![Type::Float]);
         register("mathPow", 20, Type::Float, vec![Type::Float, Type::Float]);
+        // Collections (HashMap, LinkedList) — order must match natives.cpp registry().
+        register("mapNew", 21, Type::Unknown, vec![]);
+        register("mapPut", 22, Type::Void, vec![Type::Unknown, Type::Unknown, Type::Unknown]);
+        register("mapGet", 23, Type::Unknown, vec![Type::Unknown, Type::Unknown]);
+        register("mapContainsKey", 24, Type::Bool, vec![Type::Unknown, Type::Unknown]);
+        register("mapRemove", 25, Type::Void, vec![Type::Unknown, Type::Unknown]);
+        register("mapSize", 26, Type::Int, vec![Type::Unknown]);
+        register("llNew", 27, Type::Unknown, vec![]);
+        register("llAddFirst", 28, Type::Void, vec![Type::Unknown, Type::Unknown]);
+        register("llAddLast", 29, Type::Void, vec![Type::Unknown, Type::Unknown]);
+        register("llRemoveFirst", 30, Type::Unknown, vec![Type::Unknown]);
+        register("llRemoveLast", 31, Type::Unknown, vec![Type::Unknown]);
+        register("llGet", 32, Type::Unknown, vec![Type::Unknown, Type::Int]);
+        register("llSize", 33, Type::Int, vec![Type::Unknown]);
+        register("llEmpty", 34, Type::Bool, vec![Type::Unknown]);
     }
 
     pub fn get_var_type(&self, name: &str) -> Option<Type> {
