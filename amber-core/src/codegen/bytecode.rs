@@ -50,6 +50,7 @@ pub enum OpCode {
     // --- Functions & Calls ---
     Call = 0x30,
     Return = 0x31,
+    CallNative = 0x32,
 
     // --- Utilities ---
     Pop = 0x80,

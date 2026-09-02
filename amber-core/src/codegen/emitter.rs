@@ -18,6 +18,9 @@ impl Emitter {
     pub fn new() -> Self { Self { code: Vec::new(), constants: Vec::new(), calls_to_patch: Vec::new(), current_class: None } }
 
     pub fn emit_byte(&mut self, b: u8) { self.code.push(b); }
+    pub fn emit_u16(&mut self, val: u16) {
+        self.code.extend_from_slice(&val.to_le_bytes());
+    }
     pub fn emit_int(&mut self, val: i32) {
         self.code.extend_from_slice(&val.to_le_bytes());
     }
@@ -270,6 +273,21 @@ impl Emitter {
                 }
             }
             Expr::Call(name, args) => {
+                // Native functions are emitted as OP_CALL_NATIVE with a 2-byte ID.
+                if let Some(native) = symbols.natives.get(name) {
+                    let native_id = native.id;
+                    let arity = native.param_types.len();
+                    if arity != args.len() {
+                        panic!("Native function '{}' expects {} arguments, got {}", name, arity, args.len());
+                    }
+                    for arg in args {
+                        self.emit_expr(arg, symbols);
+                    }
+                    self.emit_byte(OpCode::CallNative.into());
+                    self.emit_u16(native_id);
+                    return;
+                }
+
                 for arg in args {
                     self.emit_expr(arg, symbols);
                 }
