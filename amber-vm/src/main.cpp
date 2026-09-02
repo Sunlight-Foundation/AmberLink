@@ -14,6 +14,5 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    execute(bytecode, constants);
-    return 0;
+    return execute(bytecode, constants);
 }

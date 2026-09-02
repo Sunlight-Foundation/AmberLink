@@ -54,6 +54,9 @@ while count > 0 {
 }
 ```
 
+**Native Functions (Standard Library)**
+Built-in functions (string manipulation, math, file I/O, time, and process control) are implemented directly in the AVM and callable from any source file without an import. The compiler emits an `OP_CALL_NATIVE` (`0x32`) instruction followed by a 2-byte native ID; the VM looks the function up in its registry (`Natives::registry()` in `amber-vm/src/natives.cpp`) and invokes it. The native IDs registered in the Rust compiler (`init_native_registry` in `semant.rs`) must exactly match the registry order in `natives.cpp`. See the [Language Guide](LanguageGuide.md#8-standard-library) for the full list.
+
 4. The AVM Bytecode Format (.amc)
 The `.amc` binary format is designed to be compact and fast to load. It consists of a simple header followed by the raw bytecode instructions.
 
