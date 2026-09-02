@@ -221,3 +221,33 @@ print mathSqrt(16.0)                  // 4
 print mathPow(2.0, 10.0)              // 1024
 print strIndexOf("amberlink", "link") // 5
 ```
+
+## 9. Modules (`import`)
+
+Amberlink supports splitting a program across multiple files with `import`. An imported file's functions, classes, and helpers become available to the importing file, and imports may chain (an imported file can import another).
+
+### Import syntax
+`import "relative/path.amb"` — the path is resolved relative to the importing file's directory, then the `stdlib/` directory, then the current directory.
+
+```java
+// main.amb
+import "modlib/geometry.amb"
+
+var p = new Point()          // Point defined in shapes.amb (via geometry.amb)
+print twice(21)              // 42 (defined in shapes.amb)
+print triple(7)              // 21 (defined in geometry.amb)
+```
+
+Imports are merged at compile time into a single compilation unit and produce one `.amc` output — there is no runtime linking or separate module bytecode. Dependencies are always emitted before the files that import them, and each file is included only once (import cycles are guarded).
+
+```java
+// modlib/shapes.amb — reusable module
+class Point { int x; int y }
+int twice(int n) { return n * 2 }
+```
+
+```java
+// modlib/geometry.amb — imports another module
+import "shapes.amb"
+int triple(int n) { return n * 3 }
+```

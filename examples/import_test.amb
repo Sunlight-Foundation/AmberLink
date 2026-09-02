@@ -1,0 +1,21 @@
+// import_test.amb
+// Demonstrates the module system: imports geometry.amb, which itself imports
+// shapes.amb. Definitions from both modules are usable here (transitive import).
+
+import "modlib/geometry.amb"
+
+var p = new Point()
+p.x = 3
+p.y = 4
+
+print "twice(21): "
+print twice(21)
+
+print "triple(7): "
+print triple(7)
+
+print "greet: "
+print greet("Amberlink")
+
+print "Point x+y: "
+print p.x + p.y

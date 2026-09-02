@@ -707,6 +707,10 @@ impl Emitter {
             Stmt::Error => {
                 // Shouldn't reach emission with parse errors; nothing to emit.
             }
+            Stmt::Import(_) => {
+                // Imports are resolved by the compiler driver (main.rs) before
+                // emission and produce no bytecode of their own.
+            }
         }
     }
 

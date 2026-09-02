@@ -4,16 +4,108 @@ mod semant;
 mod codegen;
 mod ast;
 mod error;
-use error::ErrorList;
+use error::{CompileError, ErrorList};
 use codegen::bytecode::OpCode;
 
 use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process;
 use lexer::Lexer;
 use parser::Parser;
 use semant::SymbolTable;
 use codegen::emitter::Emitter;
+use ast::Stmt;
+
+// Collects the top-level statements of a module and, transitively, the
+// statements of every module it imports. Imports are resolved depth-first, so
+// a module's dependencies are always collected before the module itself.
+fn collect_module(
+    path: &Path,
+    symbols: &mut SymbolTable,
+    ordered_paths: &mut Vec<PathBuf>,
+    out: &mut Vec<Stmt>,
+    errors: &mut ErrorList,
+) {
+    let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if ordered_paths.contains(&canonical) {
+        return; // Already loaded (or being loaded: guards against import cycles).
+    }
+    ordered_paths.push(canonical);
+
+    let source = match fs::read_to_string(path) {
+        Ok(src) => src,
+        Err(e) => {
+            errors.push(CompileError::new(
+                0, 0, format!("Could not read module '{}': {}", path.display(), e),
+            ));
+            return;
+        }
+    };
+
+    // Tokenize.
+    let mut lex_errors = ErrorList::new();
+    let mut lexer = Lexer::new(source);
+    let tokens = lexer.tokenize(&mut lex_errors);
+    errors.extend(lex_errors);
+
+    // Parse against the single shared symbol table so that definitions from
+    // all modules are visible to one another, exactly as if they were one file.
+    let mut parser = Parser::new(tokens);
+    let module_ast = match parser.parse(symbols) {
+        Ok(ast) => ast,
+        Err(parse_errs) => {
+            errors.extend(parse_errs);
+            return;
+        }
+    };
+
+    // First, load dependencies so they are collected before this module.
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    for stmt in &module_ast {
+        if let Stmt::Import(dep) = stmt {
+            resolve_and_load(dep, base_dir, symbols, ordered_paths, out, errors);
+        }
+    }
+
+    // Then append this module's own non-import statements.
+    for stmt in module_ast {
+        if !matches!(stmt, Stmt::Import(_)) {
+            out.push(stmt);
+        }
+    }
+}
+
+// Resolves an import path relative to the importing file's directory, then
+// falls back to the standard library directory, then the current directory.
+fn resolve_and_load(
+    import: &str,
+    base_dir: &Path,
+    symbols: &mut SymbolTable,
+    ordered_paths: &mut Vec<PathBuf>,
+    out: &mut Vec<Stmt>,
+    errors: &mut ErrorList,
+) {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    candidates.push(base_dir.join(import));
+    candidates.push(PathBuf::from("stdlib").join(import));
+    candidates.push(PathBuf::from(import));
+
+    let mut found: Option<PathBuf> = None;
+    for cand in candidates {
+        if cand.is_file() {
+            found = Some(cand);
+            break;
+        }
+    }
+
+    match found {
+        Some(real) => collect_module(&real, symbols, ordered_paths, out, errors),
+        None => errors.push(CompileError::new(
+            0, 0, format!("Could not resolve import '{}', searched relative and stdlib/.", import),
+        )),
+    }
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -23,38 +115,22 @@ fn main() {
     }
 
     let filename = &args[1];
-    let source = fs::read_to_string(filename).unwrap_or_else(|e| {
-        eprintln!("Error: could not read '{}': {}", filename, e);
-        process::exit(1);
-    });
+    let main_path = Path::new(filename);
 
-    // 1. Tokenize
-    let mut lex_errors = ErrorList::new();
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize(&mut lex_errors);
-
-    // 2. Parse & Semantic Analysis
+    // Parse and load the main module plus all transitive imports.
+    let mut all_errors = ErrorList::new();
     let mut symbols = SymbolTable::new();
     symbols.init_native_registry();
-    let mut parser = Parser::new(tokens);
-    let ast = match parser.parse(&mut symbols) {
-        Ok(ast) => ast,
-        Err(errors) => {
-            // Combine lexer + parser errors and report them all.
-            let mut all = lex_errors;
-            all.extend(errors);
-            eprint!("{}", all);
-            process::exit(1);
-        }
-    };
+    let mut ordered_paths: Vec<PathBuf> = Vec::new();
+    let mut ast: Vec<Stmt> = Vec::new();
+    collect_module(main_path, &mut symbols, &mut ordered_paths, &mut ast, &mut all_errors);
 
-    // If the lexer produced errors (e.g. unknown characters), fail before emission.
-    if lex_errors.has_errors() {
-        eprint!("{}", lex_errors);
+    if all_errors.has_errors() {
+        eprint!("{}", all_errors);
         process::exit(1);
     }
 
-    // 3. Emit
+    // Emit the merged AST (dependencies first, then the main module).
     let mut emit_errors = ErrorList::new();
     let mut emitter = Emitter::new();
     for stmt in ast {
@@ -70,5 +146,5 @@ fn main() {
 
     let output_path = filename.replace(".amb", ".amc");
     emitter.write_file(&output_path).expect("Failed to write file");
-    println!("Amberlink: Compiled {} to {}", filename, output_path);
+    println!("Amberlink: Compiled {} ({} modules) to {}", filename, ordered_paths.len(), output_path);
 }

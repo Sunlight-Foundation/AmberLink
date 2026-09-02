@@ -1,0 +1,8 @@
+// modlib/geometry.amb
+// A module that imports another module (chained/transitive import).
+// Depends on shapes.amb and adds one more helper on top.
+import "shapes.amb"
+
+int triple(int n) {
+    return n * 3
+}

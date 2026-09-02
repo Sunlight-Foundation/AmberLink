@@ -43,7 +43,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 *The "Mature" milestone — productive developer experience.*
 
 - [~] **Standard Library** — native string manipulation, math, file I/O, time, and process functions shipped (`stdlib/core.amb`, `stdlib/io.amb`); `HashMap`, `LinkedList`, and networking still pending
-- [ ] **Module system** — `import` statements, multi-file projects
+- [x] **Module system** — `import` statements, multi-file projects
 - [ ] **Amberlink Archive (`.ama`)** — packaged bytecode + resources, like Java JARs
 - [ ] **CLI (`make`)** — improved error handling, project scaffolding, watch mode
 - [~] **Compiler improvements** — descriptive error messages with `line:col` and error recovery in the parser/emitter (`error.rs`, `synchronize()`), static type checking in `semant.rs`; backend IR design still pending

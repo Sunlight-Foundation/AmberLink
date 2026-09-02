@@ -1,0 +1,16 @@
+// modlib/shapes.amb
+// A reusable module (module system demo). Defines a Point class and some
+// helper functions. Importable from other files with: import "modlib/shapes.amb"
+
+class Point {
+    int x
+    int y
+}
+
+int twice(int n) {
+    return n * 2
+}
+
+String greet(String name) {
+    return "Hello, " + name
+}
