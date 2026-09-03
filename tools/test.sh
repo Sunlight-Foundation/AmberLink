@@ -13,7 +13,7 @@ if [ ! -x "$AMBC" ] || [ ! -x "$AVM" ]; then
   exit 1
 fi
 
-EXAMPLES="factorial hello hi basic_types_test float_test list_test test_init test_methods test_oop test_overload test_static test_visibility gc_test native_test file_io_test collections_test import_test archive_test net_test ffi_test threads_test fold_test"
+EXAMPLES="factorial hello hi basic_types_test float_test list_test test_init test_methods test_oop test_overload test_static test_visibility gc_test native_test file_io_test collections_test import_test archive_test net_test ffi_test threads_test fold_test ffi_buf_test"
 STDLIB="stdlib/core.amb stdlib/io.amb stdlib/collections.amb stdlib/net.amb stdlib/ffi.amb"
 fail=0
 
@@ -31,10 +31,22 @@ if [ -n "${PY:-}" ]; then
   sleep 2
 fi
 
+# ffi_buf_test needs the C fixture; build it when a C toolchain exists.
+fficmp=""
+if command -v cc >/dev/null 2>&1; then CC=cc
+elif command -v gcc >/dev/null 2>&1; then CC=gcc
+fi
+if [ -n "${CC:-}" ] && "$CC" -shared -fPIC -o bin/libfficmp.so examples/resources/fficmp.c >/dev/null 2>&1; then
+  fficmp=1
+else
+  echo "NOTE: no C toolchain - ffi_buf_test run step will be skipped (compile only)."
+fi
+
 for e in $EXAMPLES; do
   # --emit-ir also asserts the backend-IR decode/re-encode round-trip.
   if ! "$AMBC" "examples/$e.amb" --emit-ir >/dev/null 2>&1; then echo "$e : COMPILE FAIL"; fail=$((fail+1)); continue; fi
   if [ "$e" = "net_test" ] && [ -z "$server" ]; then echo "$e : compile OK (run skipped, no python)"; continue; fi
+  if [ "$e" = "ffi_buf_test" ] && [ -z "$fficmp" ]; then echo "$e : compile OK (run skipped, no C toolchain)"; continue; fi
   if ! "$AVM" "examples/$e.amc" >/dev/null 2>&1; then echo "$e : RUN FAIL"; fail=$((fail+1)); else echo "$e : OK"; fi
 done
 

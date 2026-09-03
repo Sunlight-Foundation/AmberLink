@@ -196,6 +196,8 @@ Load shared libraries and call C functions with `int`/`String` arguments (`Strin
 | `freeLib` | `bool freeLib(int handle)` | Closes a library; `false` for a bad handle. |
 | `callInt` | `int callInt(int handle, String symbol, int a, int b)` | Calls `int f(int, int)`. |
 | `callStr` | `int callStr(int handle, String symbol, String s)` | Calls `int f(const char*)`. |
+| `callInts` | `int callInts(int handle, String symbol, Array arr)` | Calls `int f(int*, int)` read-only over array contents. |
+| `callIntsMut` | `int callIntsMut(int handle, String symbol, Array arr)` | Same call, writes the buffer back into the array. |
 
 ### Collections (HashMap, LinkedList)
 Dynamic collections backed by VM heap objects. Keys and values can be any built-in value.
