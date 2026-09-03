@@ -231,3 +231,66 @@ the new opcode; old VMs reject new programs with the existing unknown-opcode err
 4. `print`/`printStr` share one output mutex.
 5. One real bug class found in testing: a finished-but-unjoined thread is still
    joinable, so the fast path must reap it too — or process exit aborts.
+
+## 6. FFI Array/Buffer Marshaling Design (proposed, not yet implemented)
+
+Goal: let numeric kernels live in C (the NumPy arrangement - slow glue language,
+fast kernels) by passing Amberlink arrays to C functions. Follows the v1 FFI
+(`loadLib`/`freeLib`/`callInt`/`callStr`); same fail-soft-where-sensible contract.
+
+### Proposed API
+
+```java
+var a = new int[4]
+a[0] = 3
+a[1] = 1
+a[2] = 2
+a[3] = 0
+int lib = loadLib("msvcrt.dll")
+if lib == 0 {
+    lib = loadLib("libc.so.6")
+}
+print callInts(lib, "sum4", a)     // int f(int* data, int len), read-only
+print callIntsMut(lib, "sort4", a) // same shape, writes the array back
+print a[0]                         // sorted value visible
+```
+
+- `callInts(handle, symbol, arr)` calls `int f(int* data, int len)` with `len`
+  derived from the array's actual length (never caller-supplied, so the classic
+  length-mismatch bug class cannot occur). Read-only: no copy-back.
+- `callIntsMut(handle, symbol, arr)` is the same call, then writes the buffer
+  back into the array as Integers. Array length is immutable from C.
+- Only `Array` (from `new int[n]`) is marshalled in v1, not `List`.
+  `callStr` already covers read-only text bytes; binary data goes via int arrays.
+
+### Marshaling rules
+
+- Every element must be `INT`, else a runtime error (no silent coercion).
+- Flatten into a thread-local `std::vector<int32_t>`; the GIL is released around
+  the C call exactly like `callInt`/`callStr`, and the local buffer makes that
+  safe (no aliasing into the shared constant pool or heap, even if another
+  thread appends mid-call). Copy-back happens after reacquire.
+- Type mapping assumes 32-bit `int` (true on all target platforms, Windows
+  LLP64 included); assert it with `static_assert(sizeof(int) == 4)`.
+- Bad handle / missing symbol / non-array argument: runtime errors, mirroring
+  the existing FFI natives. A faulting C function is the C code's own bug -
+  the buffer handed over is always valid.
+
+### Non-goals for v1
+
+Callbacks from C into Amberlink, structs, floats/doubles, 64-bit ints, returned
+pointers, `List` marshaling, resizing arrays from C.
+
+### Test strategy (required of the implementation PR)
+
+System libc has no portable `int f(int*, int)` export, so unlike the v1 FFI
+(which tested against `atoi`/`strlen`) this needs a ~10-line C fixture compiled
+at test time where a C toolchain exists, skipped with a note where none does -
+the same pattern as the Python echo server for networking tests.
+
+### Open questions
+
+1. Naming: `callInts`/`callIntsMut` vs a single `callBuf` that always copies back
+   (simpler surface, pays an O(n) copy for read-only kernels).
+2. Whether `char`/byte arrays deserve their own entry point or wait for a
+   proper bytes type.
