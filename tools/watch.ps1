@@ -16,7 +16,14 @@ function Run-File {
 }
 
 $last = @{}
+function Snapshot {
+    Get-ChildItem -Recurse -Filter *.amb -File -ErrorAction SilentlyContinue | ForEach-Object {
+        $last[$_.FullName] = $_.LastWriteTimeUtc.Ticks
+    }
+}
+
 Write-Output "[watch] watching *.amb under $root (Ctrl+C to stop)"
+Snapshot
 Run-File
 while ($true) {
     Start-Sleep -Seconds 2

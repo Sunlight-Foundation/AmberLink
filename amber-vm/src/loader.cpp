@@ -26,7 +26,10 @@ struct Reader {
         pos += n;
         return true;
     }
+    // Bounds-checked: never allocates more than the remaining input, so a
+    // corrupt length prefix fails fast instead of attempting a giant allocation.
     bool readString(std::string& out, uint32_t len) {
+        if (static_cast<size_t>(len) > size - pos) return false;
         out.resize(len);
         return read(&out[0], len);
     }
@@ -55,12 +58,19 @@ bool parse_amc(Reader& r, std::vector<uint8_t>& bytecode, std::vector<std::strin
     uint32_t poolCount = r.u32();
     for (uint32_t i = 0; i < poolCount; ++i) {
         std::string s;
-        if (!r.readString(s, r.u32())) return false;
+        if (!r.readString(s, r.u32())) {
+            std::cerr << "Error: Truncated constant pool." << std::endl;
+            return false;
+        }
         constants.push_back(s);
     }
 
     uint32_t codeLength = r.u32();
     if (codeLength > 0) {
+        if (static_cast<size_t>(codeLength) > r.size - r.pos) {
+            std::cerr << "Error: Truncated bytecode." << std::endl;
+            return false;
+        }
         bytecode.resize(codeLength);
         if (!r.read(bytecode.data(), codeLength)) {
             std::cerr << "Error: Unexpected end of input while reading bytecode." << std::endl;
@@ -107,23 +117,33 @@ namespace Loader {
 
         for (uint32_t i = 0; i < entryCount; ++i) {
             std::string name;
-            if (!r.readString(name, r.u32())) return false;
+            if (!r.readString(name, r.u32())) {
+                std::cerr << "Error: Truncated archive entry." << std::endl;
+                return false;
+            }
             uint32_t dataLen = r.u32();
 
             if (name == "main") {
-                // The main entry is an embedded .amc program. Parse it in place.
-                Reader sub(r.data, r.size);
-                sub.pos = r.pos;
+                // The main entry is an embedded .amc program. Parse it bounded
+                // to exactly its entry bytes so a lying length can't over-read
+                // into neighboring entries.
+                if (static_cast<size_t>(dataLen) > r.size - r.pos) {
+                    std::cerr << "Error: Truncated 'main' entry in archive." << std::endl;
+                    return false;
+                }
+                Reader sub(r.data + r.pos, dataLen);
                 if (!parse_amc(sub, bytecode, constants)) {
                     std::cerr << "Error: Failed to parse 'main' entry in archive." << std::endl;
                     return false;
                 }
                 foundMain = true;
-                // The parse consumed the whole sub-buffer; advance past its data.
                 r.pos += dataLen;
             } else {
                 std::string content;
-                if (!r.readString(content, dataLen)) return false;
+                if (!r.readString(content, dataLen)) {
+                    std::cerr << "Error: Truncated archive entry." << std::endl;
+                    return false;
+                }
                 Resources::loaded[name] = content;
             }
         }
