@@ -18,10 +18,10 @@
     #define USE_COMPUTED_GOTO
 #endif
 
-void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& constants) {
+int execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& constants) {
     if (bytecode.empty()) {
         std::cout << "AVM Warning: No bytecode to execute." << std::endl;
-        return;
+        return 0;
     }
 
     std::vector<Value> vm_stack;
@@ -92,7 +92,7 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
         DISPATCH();
 
         lbl_OP_HALT:
-            return;
+            return 0;
 
         lbl_OP_JUMP: {
             int32_t offset; std::memcpy(&offset, ip, 4); ip += 4; ip += offset;
@@ -442,7 +442,7 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
         while (ip < end) {
             uint8_t instruction = *ip++;
             switch (instruction) {
-                case OP_HALT: return;
+                case OP_HALT: return 0;
                 case OP_JUMP: {
                     int32_t offset; std::memcpy(&offset, ip, 4); ip += 4; ip += offset; break;
                 }
@@ -757,5 +757,7 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
 #endif
     } catch (const std::runtime_error& e) {
         std::cerr << "AVM Runtime Error: " << e.what() << std::endl;
+        return 1;
     }
+    return 0;
 }

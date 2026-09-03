@@ -1,0 +1,30 @@
+// native_test.amb
+// Exercises the built-in standard library native functions.
+
+String s = "Hello, AmberLink!"
+print "strLen(s): "
+print strLen(s)
+print "strCharAt(s, 0): "
+print strCharAt(s, 0)
+print "strSubstring(s, 7, 5): "
+print strSubstring(s, 7, 5)
+print "strIndexOf(s, 'Link'): "
+print strIndexOf(s, "Link")
+print "strIndexOf(s, 'xyz'): "
+print strIndexOf(s, "xyz")
+print "strToUpper(s): "
+print strToUpper(s)
+print "strToLower(s): "
+print strToLower(s)
+print "strEquals('abc', 'abc'): "
+print strEquals("abc", "abc")
+print "strEquals('abc', 'abd'): "
+print strEquals("abc", "abd")
+print "mathSqrt(16.0): "
+print mathSqrt(16.0)
+print "mathPow(2.0, 10.0): "
+print mathPow(2.0, 10.0)
+print "clock() is finite: "
+print clock() > 0.0
+printStr("printStr says: ")
+printStr("inline")

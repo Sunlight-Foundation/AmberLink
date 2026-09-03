@@ -84,8 +84,23 @@ impl SymbolTable {
         register("input", 1, Type::String, vec![]);
         register("toString", 2, Type::String, vec![Type::Int]);
         register("toInt", 3, Type::Int, vec![Type::String]);
-        register("toFloat", 4, Type::Float, vec![Type::String]);
-        register("abs", 5, Type::Float, vec![Type::Float]);
+        register("toFloat", 4, Type::Float, vec![Type::Float]);
+        register("abs", 5, Type::Unknown, vec![Type::Unknown]);
+        register("printStr", 6, Type::Void, vec![Type::String]);
+        register("readFile", 7, Type::String, vec![Type::String]);
+        register("writeFile", 8, Type::Bool, vec![Type::String, Type::String]);
+        register("exit", 9, Type::Void, vec![Type::Int]);
+        register("sleep", 10, Type::Void, vec![Type::Int]);
+        register("clock", 11, Type::Float, vec![]);
+        register("strLen", 12, Type::Int, vec![Type::String]);
+        register("strCharAt", 13, Type::Char, vec![Type::String, Type::Int]);
+        register("strSubstring", 14, Type::String, vec![Type::String, Type::Int, Type::Int]);
+        register("strIndexOf", 15, Type::Int, vec![Type::String, Type::String]);
+        register("strEquals", 16, Type::Bool, vec![Type::String, Type::String]);
+        register("strToUpper", 17, Type::String, vec![Type::String]);
+        register("strToLower", 18, Type::String, vec![Type::String]);
+        register("mathSqrt", 19, Type::Float, vec![Type::Float]);
+        register("mathPow", 20, Type::Float, vec![Type::Float, Type::Float]);
     }
 
     pub fn get_var_type(&self, name: &str) -> Option<Type> {

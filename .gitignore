@@ -19,3 +19,7 @@
 .DS_Store
 .vscode/
 .idea/
+
+# Example runtime output
+stdlib_test_out.txt
+
