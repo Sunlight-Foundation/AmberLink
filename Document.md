@@ -1,4 +1,4 @@
-# 📄 Amberlink: Technical Specification (v0.4.1)
+# 📄 Amberlink: Technical Specification (v0.7)
 
 Amberlink is a high-performance, multi-paradigm programming language designed to bridge the gap between the safety of Java and the raw power of C++. It utilizes a unique Dual-Backend approach, allowing code to run either on a dedicated Virtual Machine (AVM) or as a native binary.
 
@@ -54,6 +54,9 @@ while count > 0 {
 }
 ```
 
+**Native Functions (Standard Library)**
+Built-in functions (string manipulation, math, file I/O, time, and process control) are implemented directly in the AVM and callable from any source file without an import. The compiler emits an `OP_CALL_NATIVE` (`0x32`) instruction followed by a 2-byte native ID; the VM looks the function up in its registry (`Natives::registry()` in `amber-vm/src/natives.cpp`) and invokes it. The native IDs registered in the Rust compiler (`init_native_registry` in `semant.rs`) must exactly match the registry order in `natives.cpp`. See the [Language Guide](LanguageGuide.md#8-standard-library) for the full list.
+
 4. The AVM Bytecode Format (.amc)
 The `.amc` binary format is designed to be compact and fast to load. It consists of a simple header followed by the raw bytecode instructions.
 
@@ -85,25 +88,40 @@ Amberlink/
 
 
 7. Build and Run
-Amberlink uses a Python script (`scripts/Amberlink.py`) as a unified interface for building the toolchain and compiling user code.
+Amberlink uses `make` as a unified interface for building the toolchain and compiling user code.
 
-1. **Prerequisites:** Ensure Rust (Cargo), C++ (CMake), and Python 3 are installed.
+1. **Prerequisites:** Ensure Rust (Cargo), C++ (CMake), and `make` are installed.
 
 2. **Initialize the Toolchain:**
    This compiles `amber-core` (Rust) and `amber-vm` (C++) and places binaries in `bin/`.
    ```bash
-   python scripts/Amberlink.py init
+   make init
    ```
 
 3. **Build Code:**
    Compiles an `.amb` file to `.amc` bytecode using the built compiler.
    ```bash
-   python scripts/Amberlink.py build main.amb
+   make build file=main.amb
    ```
 
 4. **Run Bytecode:**
    Execute the compiled file using the VM.
    ```bash
-   ./bin/avm output.amc      # Linux/macOS
-   .\bin\avm.exe output.amc  # Windows
+   make run file=main.amb
    ```
+
+## 4. Backend IR
+
+The compiler lowers AST to bytes in one step today. The backend IR (`amber-core/src/codegen/ir.rs`)
+models that same program as structured data — one `IrInstr` per operation with decoded
+operands — and is the interface future backends (LLVM, AOT) consume instead of raw bytes.
+The bytecode backend is its first consumer.
+
+- **Coverage:** every opcode the emitter produces (`bytecode.rs`), with constant-pool-aware
+  pretty-printing (`LoadConst` shows the pooled string, `NewInstance` the class name).
+- **Jumps resolved:** targets print as absolute byte offsets (`jump @42`); on the wire they stay
+  relative-to-operand-end as the VM executes them (`ip += 4; ip += offset` in `avm.cpp`).
+- **Round-trip guarantee:** `encode(decode(bytes)) == bytes`. `ambc --emit-ir` dumps the IR
+  listing and asserts the round-trip, so decoder drift fails the build loudly.
+- **Design rule for new opcodes:** any new opcode must add its operand layout to `ir.rs`
+  (`decode` + `encode` + `format_instr`), or `--emit-ir` rejects the program.

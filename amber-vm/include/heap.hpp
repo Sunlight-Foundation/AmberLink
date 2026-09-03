@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstddef>
+#include "value.hpp"
 
 // Offset to distinguish Heap Objects from Constant Pool indices in negative handles
 constexpr int32_t HEAP_HANDLE_OFFSET = 0x40000000;
@@ -11,7 +12,10 @@ constexpr int32_t HEAP_HANDLE_OFFSET = 0x40000000;
 enum class ObjType {
     STRING,
     ARRAY,
-    INSTANCE
+    INSTANCE,
+    LIST,
+    HASH_MAP,
+    LINKED_LIST
 };
 
 struct AmberObject {
@@ -21,19 +25,47 @@ struct AmberObject {
 };
 
 struct ArrayObject : AmberObject {
-    std::vector<int32_t> data;
+    std::vector<Value> data;
     ArrayObject(size_t size) {
         type = ObjType::ARRAY;
-        data.resize(size, 0);
+        data.resize(size, Value()); // Initialize with default Value (INT 0)
+    }
+};
+
+struct ListObject : AmberObject {
+    std::vector<Value> items;
+    ListObject() {
+        type = ObjType::LIST;
+    }
+};
+
+// A key/value pair stored in a HashMapObject.
+struct HashEntry {
+    Value key;
+    Value value;
+    HashEntry(const Value& k, const Value& v) : key(k), value(v) {}
+};
+
+struct HashMapObject : AmberObject {
+    std::vector<HashEntry> entries;
+    HashMapObject() {
+        type = ObjType::HASH_MAP;
+    }
+};
+
+struct LinkedListObject : AmberObject {
+    std::vector<Value> items;
+    LinkedListObject() {
+        type = ObjType::LINKED_LIST;
     }
 };
 
 struct InstanceObject : AmberObject {
     uint32_t class_id;
-    std::vector<int32_t> fields;
+    std::vector<Value> fields;
     InstanceObject(uint32_t cls_id, size_t field_count) : class_id(cls_id) {
         type = ObjType::INSTANCE;
-        fields.resize(field_count, 0);
+        fields.resize(field_count, Value());
     }
 };
 
@@ -44,7 +76,7 @@ public:
     ~Heap();
     int32_t register_object(AmberObject* obj);
     void mark(AmberObject* obj, size_t constant_pool_size);
-    void collect(const std::vector<int32_t>& stack, const std::vector<int32_t>& globals, size_t constant_pool_size);
+    void collect(const std::vector<Value>& stack, const std::vector<Value>& globals, size_t constant_pool_size);
     void sweep();
 };
 

@@ -1,0 +1,24 @@
+// Test for List Collections in Amberlink v0.5.0
+
+print "--- List Test ---"
+
+List my_list = new List()
+
+my_list.add(10)
+my_list.add("hello")
+my_list.add(true)
+my_list.add(3.14)
+
+print "List size:"
+print my_list.size()
+
+print "Item at index 1:"
+print my_list.get(1)
+
+print "Setting item at index 1 to 'world'"
+my_list.set(1, "world")
+
+print "Item at index 1 after set:"
+print my_list.get(1)
+
+print "--- End of Test ---"

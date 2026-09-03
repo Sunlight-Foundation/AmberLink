@@ -1,0 +1,33 @@
+// float_test.amb
+// Tests floating point arithmetic and printing
+
+print "--- Float Test ---"
+
+float pi = 3.14159
+float radius = 2.5
+
+print "Pi:"
+print pi
+
+print "Radius:"
+print radius
+
+float area = pi * radius * radius
+print "Area (pi * r * r):"
+print area
+
+float double_pi = pi + pi
+print "Pi + Pi:"
+print double_pi
+
+float half_pi = pi / 2.0
+print "Pi / 2.0:"
+print half_pi
+
+if area > 10.0 {
+    print "Area is greater than 10.0"
+} else {
+    print "Area is less than or equal to 10.0"
+}
+
+print "--- End Float Test ---"

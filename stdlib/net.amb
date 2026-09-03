@@ -1,0 +1,10 @@
+// stdlib/net.amb
+// Networking: minimal HTTP/1.0 client implemented as VM natives.
+// Only http:// URLs are supported (no TLS). All functions are fail-soft
+// and return "" on any network/parsing failure, like readFile.
+
+// httpGet(url) : String — response body, or "" on failure.
+print httpGet("http://127.0.0.1:8123/hello")
+
+// httpPost(url, body) : String — POSTs body, returns response body or "".
+print httpPost("http://127.0.0.1:8123/echo", "hello server")

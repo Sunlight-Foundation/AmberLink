@@ -1,0 +1,20 @@
+// stdlib/io.amb
+// I/O standard library: input, output, and file access as VM natives.
+// These functions are registered as built-ins and callable from any Amberlink
+// program (no import needed). This file documents and exercises them.
+
+// --- Output ---
+// printStr(str) : void   -- prints without the VM print() decoration or newline
+printStr("hello")
+
+// --- Input ---
+// input() : String       -- reads one line from stdin
+String line = input()
+
+// --- File access ---
+// writeFile(path, content) : bool
+bool ok = writeFile("out.txt", "hello world")
+// readFile(path) : String
+String contents = readFile("out.txt")
+
+print contents

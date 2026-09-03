@@ -1,0 +1,18 @@
+class Secret {
+    private int passcode;
+    private void doSecret() {
+        print "Secret";
+    }
+
+    init() {
+        this.passcode = 1234;
+        this.doSecret(); // Should work
+    }
+
+    public void tryAccess() {
+        print this.passcode;
+    }
+}
+
+var s = new Secret();
+s.tryAccess();

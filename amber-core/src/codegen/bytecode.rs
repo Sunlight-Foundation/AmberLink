@@ -18,21 +18,41 @@ pub enum OpCode {
     StoreArray = 0x17,
     LoadArray = 0x18,
 
+    // --- Basic Types ---
+    PushFloat = 0x19,
+    PushBool = 0x1A,
+    PushChar = 0x1B,
+
     // --- Arithmetic & Logic ---
     Add = 0x20,
     Sub = 0x21,
     Mul = 0x22,
     Div = 0x23,
     Less = 0x24,
+    Greater = 0x25,
+    Equal = 0x26,
+    NotEqual = 0x27,
+    LessEqual = 0x28,
+    GreaterEqual = 0x29,
 
     // --- Object-Oriented ---
     NewInstance = 0x40,
     GetField = 0x41,
     SetField = 0x42,
 
-    // --- Utilities ---
+    // --- Collections (List) ---
+    NewList = 0x50,
+    ListAdd = 0x51,
+    ListGet = 0x52,
+    ListSet = 0x53,
+    ListSize = 0x54,
+
+    // --- Functions & Calls ---
     Call = 0x30,
     Return = 0x31,
+    CallNative = 0x32,
+
+    // --- Utilities ---
     Pop = 0x80,
     Print = 0x81,
 }

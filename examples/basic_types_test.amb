@@ -1,0 +1,53 @@
+// Test for Basic Types in Amberlink v0.5.0
+
+// 1. Float Arithmetic
+print "--- Float Test ---"
+float pi = 3.14159
+float r = 2.0
+float area = pi * r * r
+print "Area of circle with radius 2.0:"
+print area
+
+float a = 10.5
+float b = 2.5
+print "10.5 + 2.5 ="
+print a + b
+print "10.5 - 2.5 ="
+print a - b
+print "10.5 / 2.5 ="
+print a / b
+
+// 2. Boolean Logic
+print "--- Boolean Test ---"
+bool is_coding_fun = true
+bool is_bug_fun = false
+
+print "Is coding fun?"
+print is_coding_fun
+print "Is debugging fun?"
+print is_bug_fun
+
+if (is_coding_fun) {
+    print "Yes, coding is fun!"
+}
+
+// 3. Character Handling
+print "--- Char Test ---"
+char c1 = 'A'
+char c2 = 'B'
+print "First char:"
+print c1
+print "Second char:"
+print c2
+
+// 4. Comparison
+print "--- Comparison Test ---"
+if (a > b) {
+    print "10.5 is greater than 2.5"
+}
+
+if (c1 < c2) {
+    print "A comes before B"
+}
+
+print "--- End of Test ---"

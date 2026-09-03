@@ -1,0 +1,58 @@
+// collections_test.amb
+// Exercises the HashMap and LinkedList native-backed collections.
+
+// --- HashMap ---
+var ages = mapNew()
+mapPut(ages, "alice", 30)
+mapPut(ages, "bob", 25)
+mapPut(ages, "carol", 40)
+
+print "age of alice: "
+print mapGet(ages, "alice")
+
+print "has bob: "
+print mapContainsKey(ages, "bob")
+
+print "has dave: "
+print mapContainsKey(ages, "dave")
+
+print "map size: "
+print mapSize(ages)
+
+// Update an existing key
+mapPut(ages, "alice", 31)
+print "alice updated: "
+print mapGet(ages, "alice")
+
+mapRemove(ages, "bob")
+print "size after remove: "
+print mapSize(ages)
+
+// Non-string keys work too
+var byId = mapNew()
+mapPut(byId, 100, "hundred")
+print "byId[100]: "
+print mapGet(byId, 100)
+
+// --- LinkedList ---
+var queue = llNew()
+llAddLast(queue, 10)
+llAddLast(queue, 20)
+llAddLast(queue, 30)
+llAddFirst(queue, 5)
+
+print "queue size: "
+print llSize(queue)
+print "queue[0]: "
+print llGet(queue, 0)
+print "queue[3]: "
+print llGet(queue, 3)
+
+print "remove first: "
+print llRemoveFirst(queue)
+print "remove last: "
+print llRemoveLast(queue)
+print "size after: "
+print llSize(queue)
+print "empty now: "
+print llEmpty(queue)
