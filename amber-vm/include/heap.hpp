@@ -2,6 +2,7 @@
 #define HEAP_HPP
 
 #include <vector>
+#include <unordered_map>
 #include <cstdint>
 #include <cstddef>
 #include "value.hpp"
@@ -48,6 +49,9 @@ struct HashEntry {
 
 struct HashMapObject : AmberObject {
     std::vector<HashEntry> entries;
+    // Hash index: key hash -> positions in entries. Turns O(n) scans into
+    // O(1) lookups. Holds indices (not pointers), so the GC needs no changes.
+    std::unordered_map<uint64_t, std::vector<size_t>> index;
     HashMapObject() {
         type = ObjType::HASH_MAP;
     }

@@ -8,6 +8,8 @@
 #include <thread>
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
+#include <cstring>
 #include "resources.hpp"
 
 #ifdef _WIN32
@@ -315,6 +317,56 @@ static bool value_equal(const Value& a, const Value& b) {
     return false;
 }
 
+// Hash of a Value, consistent with value_equal: equal values hash equal.
+// (STRING_CONST keys compare by pool index, so the index — not the content —
+// is hashed. Float -0.0 is normalized to +0.0 to match == semantics.)
+static uint64_t value_hash(const Value& v) {
+    uint64_t h = static_cast<uint64_t>(static_cast<int>(v.type));
+    uint64_t p = 0;
+    switch (v.type) {
+        case ValueType::INT: p = static_cast<uint64_t>(static_cast<uint32_t>(v.as.i)); break;
+        case ValueType::FLOAT: {
+            float f = v.as.f;
+            if (f == 0.0f) f = 0.0f; // normalize -0.0
+            uint32_t b = 0;
+            std::memcpy(&b, &f, sizeof(b));
+            p = b;
+            break;
+        }
+        case ValueType::BOOL: p = v.as.b ? 1u : 0u; break;
+        case ValueType::CHAR: p = static_cast<uint64_t>(static_cast<unsigned char>(v.as.c)); break;
+        case ValueType::STRING_CONST: p = static_cast<uint64_t>(static_cast<uint32_t>(v.as.str_idx)); break;
+        case ValueType::OBJ_REF: p = static_cast<uint64_t>(static_cast<uint32_t>(v.as.obj_ref)); break;
+    }
+    // splitmix64 finalizer over the combined input.
+    uint64_t z = h + 0x9E3779B97F4A7C15ULL + p;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+// Finds key in hm->entries via the hash index. Returns true + position if present.
+static bool map_find(HashMapObject* hm, const Value& key, size_t& pos) {
+    auto it = hm->index.find(value_hash(key));
+    if (it == hm->index.end()) return false;
+    for (size_t p : it->second) {
+        if (p < hm->entries.size() && value_equal(hm->entries[p].key, key)) {
+            pos = p;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Rebuilds the whole index. Used after removal (which shifts positions);
+// simple and obviously correct, and removal is already O(n) via vector erase.
+static void map_rebuild_index(HashMapObject* hm) {
+    hm->index.clear();
+    for (size_t i = 0; i < hm->entries.size(); ++i) {
+        hm->index[value_hash(hm->entries[i].key)].push_back(i);
+    }
+}
+
 // --- mapNew() : HashMap ---
 static Value native_mapNew(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
     (void)args; (void)constants;
@@ -329,10 +381,10 @@ static Value native_mapPut(std::vector<Value>& args, std::vector<std::string>& c
     if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapPut expects a HashMap.");
     HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
     if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapPut expects a HashMap.");
-    for (HashEntry& entry : hm->entries) {
-        if (value_equal(entry.key, args[1])) { entry.value = args[2]; return Value(); }
-    }
+    size_t pos = 0;
+    if (map_find(hm, args[1], pos)) { hm->entries[pos].value = args[2]; return Value(); }
     hm->entries.push_back(HashEntry(args[1], args[2]));
+    hm->index[value_hash(args[1])].push_back(hm->entries.size() - 1);
     return Value();
 }
 
@@ -344,9 +396,8 @@ static Value native_mapGet(std::vector<Value>& args, std::vector<std::string>& c
     if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapGet expects a HashMap.");
     HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
     if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapGet expects a HashMap.");
-    for (const HashEntry& entry : hm->entries) {
-        if (value_equal(entry.key, args[1])) return entry.value;
-    }
+    size_t pos = 0;
+    if (map_find(hm, args[1], pos)) return hm->entries[pos].value;
     return Value(); // absent key -> int 0
 }
 
@@ -357,10 +408,8 @@ static Value native_mapContainsKey(std::vector<Value>& args, std::vector<std::st
     if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapContainsKey expects a HashMap.");
     HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
     if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapContainsKey expects a HashMap.");
-    for (const HashEntry& entry : hm->entries) {
-        if (value_equal(entry.key, args[1])) return Value(true);
-    }
-    return Value(false);
+    size_t pos = 0;
+    return Value(map_find(hm, args[1], pos));
 }
 
 // --- mapRemove(map, key) : void ---
@@ -370,11 +419,10 @@ static Value native_mapRemove(std::vector<Value>& args, std::vector<std::string>
     if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapRemove expects a HashMap.");
     HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
     if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapRemove expects a HashMap.");
-    for (size_t i = 0; i < hm->entries.size(); ++i) {
-        if (value_equal(hm->entries[i].key, args[1])) {
-            hm->entries.erase(hm->entries.begin() + i);
-            break;
-        }
+    size_t pos = 0;
+    if (map_find(hm, args[1], pos)) {
+        hm->entries.erase(hm->entries.begin() + pos);
+        map_rebuild_index(hm);
     }
     return Value();
 }
