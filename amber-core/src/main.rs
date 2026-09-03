@@ -4,6 +4,7 @@ mod semant;
 mod codegen;
 mod ast;
 mod error;
+mod optimizer;
 use error::{CompileError, ErrorList};
 use codegen::bytecode::OpCode;
 
@@ -117,10 +118,11 @@ fn main() {
     let filename = &args[1];
 
     // Parse optional flags after the source file:
-    //   ambc <file.amb> [--archive out.ama] [--resource name=path]... [--emit-ir]
+    //   ambc <file.amb> [--archive out.ama] [--resource name=path]... [--emit-ir] [--no-opt]
     let mut archive_out: Option<String> = None;
     let mut resources: Vec<(String, Vec<u8>)> = Vec::new();
     let mut emit_ir = false;
+    let mut no_opt = false;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
@@ -158,6 +160,10 @@ fn main() {
                 emit_ir = true;
                 i += 1;
             }
+            "--no-opt" => {
+                no_opt = true;
+                i += 1;
+            }
             other => {
                 eprintln!("Error: unexpected argument '{}'", other);
                 process::exit(1);
@@ -179,6 +185,9 @@ fn main() {
         eprint!("{}", all_errors);
         process::exit(1);
     }
+
+    // Local optimization pass over the merged AST (skipped with --no-opt).
+    let ast = if no_opt { ast } else { optimizer::fold_program(ast) };
 
     // Emit the merged AST (dependencies first, then the main module).
     let mut emit_errors = ErrorList::new();

@@ -16,6 +16,12 @@ Amberlink uses a Two-Pass Compilation strategy to solve the "Forward Declaration
 1.  **Pass 1 (Discovery):** The compiler scans the `.amb` source file to identify all function signatures, class definitions, and global variables. It populates the Symbol Table.
 2.  **Pass 2 (Validation & Emission):** The compiler verifies the logic and types. If successful, the Emitter generates a highly optimized binary file with the `.amc` (Amber Compiled) extension.
 
+Between the passes, a local **constant-folding** rewrite (`amber-core/src/optimizer.rs`, on by
+default, `--no-opt` to disable) evaluates literal-only expressions: int/float/char
+arithmetic and comparisons, bool and string equality, and string `+` (which also
+shrinks the constant pool). Anything else — including division by zero — is left
+unfolded so runtime errors behave identically with the pass on or off.
+
 ## 3. Language Design Philosophy
 
 Amberlink is designed to be cleaner and more stable than Java, offering a familiar environment for existing developers while removing boilerplate.
