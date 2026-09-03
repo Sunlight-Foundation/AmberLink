@@ -123,6 +123,11 @@ impl SymbolTable {
         // Networking (minimal HTTP/1.0 client, http:// only). Order must match natives.cpp registry().
         register("httpGet", 38, Type::String, vec![Type::String]);
         register("httpPost", 39, Type::String, vec![Type::String, Type::String]);
+        // FFI (call C functions in shared libraries). Order must match natives.cpp registry().
+        register("loadLib", 40, Type::Int, vec![Type::String]);
+        register("freeLib", 41, Type::Bool, vec![Type::Int]);
+        register("callInt", 42, Type::Int, vec![Type::Int, Type::String, Type::Int, Type::Int]);
+        register("callStr", 43, Type::Int, vec![Type::Int, Type::String, Type::String]);
     }
 
     pub fn get_var_type(&self, name: &str) -> Option<Type> {

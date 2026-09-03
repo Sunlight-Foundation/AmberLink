@@ -187,6 +187,16 @@ Minimal HTTP/1.0 client (`http://` only, no TLS). Fail-soft: `""` on any failure
 | `httpGet` | `String httpGet(String url)` | Response body, or `""` on failure. |
 | `httpPost` | `String httpPost(String url, String body)` | POSTs `body`, returns response body or `""`. |
 
+### FFI (calling C)
+Load shared libraries and call C functions with `int`/`String` arguments (`String` passes as `const char*`). Missing libraries give handle `0`; bad handles or symbols are runtime errors; wrong C signatures are undefined, as in C.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `loadLib` | `int loadLib(String path)` | Opens a library (`msvcrt.dll`, `libc.so.6`); `0` on failure. |
+| `freeLib` | `bool freeLib(int handle)` | Closes a library; `false` for a bad handle. |
+| `callInt` | `int callInt(int handle, String symbol, int a, int b)` | Calls `int f(int, int)`. |
+| `callStr` | `int callStr(int handle, String symbol, String s)` | Calls `int f(const char*)`. |
+
 ### Collections (HashMap, LinkedList)
 Dynamic collections backed by VM heap objects. Keys and values can be any built-in value.
 
