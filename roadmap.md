@@ -58,7 +58,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 - [ ] **Register-based bytecode** — migrate AVM from stack-based to register-based instruction set to reduce unnecessary push/pop; significant rewrite but foundational for JIT
 - [ ] **Inline caching** — cache resolved field/method indices at call sites after first lookup; eliminates linear scans on repeat access
 - [ ] **Concurrency** — lightweight threads, `async`/`await`, or actor model
-- [ ] **FFI** — call C functions from Amberlink; access system libraries
+- [x] **FFI** — call C functions from Amberlink (`loadLib`/`callInt`/`callStr` for int and string marshaling); access system libraries
 
 ---
 

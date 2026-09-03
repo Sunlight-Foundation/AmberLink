@@ -670,6 +670,106 @@ static Value native_httpPost(std::vector<Value>& args, std::vector<std::string>&
     return make_string_const(constants, out);
 }
 
+// --- FFI: call C functions in shared libraries ---
+// Only int and string arguments are marshalled in v1:
+//   loadLib(path) -> handle (int, 0 on failure)
+//   freeLib(handle) -> bool
+//   callInt(handle, symbol, a, b) -> int f(int, int)
+//   callStr(handle, symbol, s) -> int f(const char*)
+// A missing library yields handle 0; a bad handle or missing symbol is a
+// runtime error. Calling with the wrong C signature is undefined (as in C).
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+// Open library handles. Slot index+1 is the Amberlink handle (0 = invalid),
+// so freed slots stay reserved and existing handles never shift.
+static std::vector<void*> ffi_libs;
+
+static void* ffi_get_lib(int32_t handle) {
+    if (handle <= 0 || (size_t)handle > ffi_libs.size()) return nullptr;
+    return ffi_libs[(size_t)handle - 1];
+}
+
+static void* ffi_symbol(void* lib, const std::string& name) {
+#ifdef _WIN32
+    return (void*)GetProcAddress((HMODULE)lib, name.c_str());
+#else
+    return dlsym(lib, name.c_str());
+#endif
+}
+
+// --- loadLib(path) : int ---
+static Value native_loadLib(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)heap;
+    if (args.size() != 1) throw std::runtime_error("loadLib expects 1 argument.");
+    if (args[0].type != ValueType::STRING_CONST) throw std::runtime_error("loadLib expects a String path.");
+    const std::string& path = constants[args[0].as.str_idx];
+#ifdef _WIN32
+    HMODULE h = LoadLibraryA(path.c_str());
+    if (!h) return Value((int32_t)0);
+    ffi_libs.push_back((void*)h);
+#else
+    void* h = dlopen(path.c_str(), RTLD_LAZY);
+    if (!h) return Value((int32_t)0);
+    ffi_libs.push_back(h);
+#endif
+    return Value((int32_t)ffi_libs.size());
+}
+
+// --- freeLib(handle) : bool ---
+static Value native_freeLib(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)heap; (void)constants;
+    if (args.size() != 1) throw std::runtime_error("freeLib expects 1 argument.");
+    if (args[0].type != ValueType::INT) throw std::runtime_error("freeLib expects an int handle.");
+    int32_t handle = args[0].as.i;
+    void* h = ffi_get_lib(handle);
+    if (!h) return Value(false);
+#ifdef _WIN32
+    FreeLibrary((HMODULE)h);
+#else
+    dlclose(h);
+#endif
+    ffi_libs[(size_t)handle - 1] = nullptr;
+    return Value(true);
+}
+
+// --- callInt(handle, symbol, a, b) : int ---
+static Value native_callInt(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)heap;
+    if (args.size() != 4) throw std::runtime_error("callInt expects 4 arguments.");
+    if (args[0].type != ValueType::INT) throw std::runtime_error("callInt expects an int handle.");
+    if (args[1].type != ValueType::STRING_CONST) throw std::runtime_error("callInt expects a String symbol.");
+    if (args[2].type != ValueType::INT || args[3].type != ValueType::INT) throw std::runtime_error("callInt expects int arguments.");
+    void* lib = ffi_get_lib(args[0].as.i);
+    if (!lib) throw std::runtime_error("callInt: bad library handle.");
+    const std::string& name = constants[args[1].as.str_idx];
+    void* sym = ffi_symbol(lib, name);
+    if (!sym) throw std::runtime_error("callInt: symbol not found: " + name);
+    typedef int (*Fn2)(int, int);
+    Fn2 fn = reinterpret_cast<Fn2>(sym);
+    return Value((int32_t)fn(args[2].as.i, args[3].as.i));
+}
+
+// --- callStr(handle, symbol, s) : int ---
+static Value native_callStr(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)heap;
+    if (args.size() != 3) throw std::runtime_error("callStr expects 3 arguments.");
+    if (args[0].type != ValueType::INT) throw std::runtime_error("callStr expects an int handle.");
+    if (args[1].type != ValueType::STRING_CONST) throw std::runtime_error("callStr expects a String symbol.");
+    if (args[2].type != ValueType::STRING_CONST) throw std::runtime_error("callStr expects a String argument.");
+    void* lib = ffi_get_lib(args[0].as.i);
+    if (!lib) throw std::runtime_error("callStr: bad library handle.");
+    const std::string& name = constants[args[1].as.str_idx];
+    void* sym = ffi_symbol(lib, name);
+    if (!sym) throw std::runtime_error("callStr: symbol not found: " + name);
+    typedef int (*FnS)(const char*);
+    FnS fn = reinterpret_cast<FnS>(sym);
+    return Value((int32_t)fn(constants[args[2].as.str_idx].c_str()));
+}
+
 std::vector<NativeEntry>& registry() {
     static std::vector<NativeEntry> reg = {
         {native_len, 1},
@@ -712,6 +812,10 @@ std::vector<NativeEntry>& registry() {
         {native_resourceNames, 0},
         {native_httpGet, 1},
         {native_httpPost, 2},
+        {native_loadLib, 1},
+        {native_freeLib, 1},
+        {native_callInt, 4},
+        {native_callStr, 3},
     };
     return reg;
 }
