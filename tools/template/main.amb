@@ -1,0 +1,5 @@
+// main.amb - created by make new name=<project>
+// Build: make build file=main.amb
+// Run:   make run file=main.amb
+
+print "Hello, Amberlink!"
