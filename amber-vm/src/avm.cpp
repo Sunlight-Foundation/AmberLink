@@ -3,6 +3,7 @@
 #include "heap.hpp"
 #include "value.hpp"
 #include "natives.hpp"
+#include "vm.hpp"
 #include <iostream>
 #include <vector>
 #include <stack>
@@ -18,17 +19,37 @@
     #define USE_COMPUTED_GOTO
 #endif
 
+static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> args,
+                    bool is_main, Value& out_result);
+
 int execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& constants) {
     if (bytecode.empty()) {
         std::cout << "AVM Warning: No bytecode to execute." << std::endl;
         return 0;
     }
 
-    std::vector<Value> vm_stack;
+    VMContext vm;
+    vm.bytecode = &bytecode;
+    vm.constants = &constants;
+    std::vector<Value> no_args;
+    Value result;
+    return run_loop(vm, bytecode.data(), no_args, true, result);
+}
+
+// The interpreter loop, shared by the main thread and (in a later slice)
+// spawned threads. Per-thread state (stacks, ip) is local; VMContext holds
+// what threads share. is_main/out_result are dormant until OP_SPAWN lands;
+// they fix the call shape now so the next slice touches no signatures.
+static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> args,
+                    bool is_main, Value& out_result) {
+    (void)is_main; (void)out_result;
+
+    std::vector<Value> vm_stack(std::move(args));
     vm_stack.reserve(1024);
 
-    Heap gc;
-    std::vector<Value> globals;
+    Heap& gc = vm.heap;
+    std::vector<Value>& globals = vm.globals;
+    std::vector<std::string>& constants = *vm.constants;
     std::vector<const uint8_t*> call_stack;
     std::vector<size_t> fp_stack;
     size_t fp = 0;
@@ -37,8 +58,8 @@ int execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& cons
     // dispatch never jumps across its construction/destruction).
     std::vector<Value> native_args;
 
-    const uint8_t* ip = bytecode.data();
-    const uint8_t* end = ip + bytecode.size();
+    const uint8_t* ip = start_ip;
+    const uint8_t* end = vm.bytecode->data() + vm.bytecode->size();
 
     try {
 #ifdef USE_COMPUTED_GOTO
@@ -391,7 +412,7 @@ int execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& cons
             fp_stack.push_back(fp);
             fp = vm_stack.size() - arg_count;
             call_stack.push_back(ip);
-            ip = bytecode.data() + target_offset;
+            ip = vm.bytecode->data() + target_offset;
             DISPATCH();
         }
         lbl_OP_RETURN: {
@@ -713,7 +734,7 @@ int execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& cons
                     fp_stack.push_back(fp);
                     fp = vm_stack.size() - arg_count;
                     call_stack.push_back(ip);
-                    ip = bytecode.data() + target_offset; break;
+                    ip = vm.bytecode->data() + target_offset; break;
                 }
                 case OP_RETURN: {
                     if (call_stack.empty()) throw std::runtime_error("RETURN with empty call stack.");
