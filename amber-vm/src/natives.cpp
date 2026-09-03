@@ -818,6 +818,70 @@ static Value native_join(std::vector<Value>& args, std::vector<std::string>& con
     }
 }
 
+// --- FFI buffers: int f(int*, int) over Array contents ---
+// Flattening rule: every element must be INT, else a runtime error. The flat
+// buffer is thread-local, so the GIL can be released around the C call.
+
+static ArrayObject* ffi_require_array(std::vector<Value>& args, Heap& heap, size_t idx, const char* fn) {
+    if (args[idx].type != ValueType::OBJ_REF) throw std::runtime_error(std::string(fn) + " expects an Array argument.");
+    ArrayObject* arr = static_cast<ArrayObject*>(heap.objects[args[idx].as.obj_ref]);
+    if (!arr || arr->type != ObjType::ARRAY) throw std::runtime_error(std::string(fn) + " expects an Array argument.");
+    return arr;
+}
+
+static std::vector<int32_t> ffi_flatten_ints(ArrayObject* arr, const char* fn) {
+    std::vector<int32_t> buf;
+    buf.reserve(arr->data.size());
+    for (const Value& v : arr->data) {
+        if (v.type != ValueType::INT) throw std::runtime_error(std::string(fn) + " expects an int Array.");
+        buf.push_back(v.as.i);
+    }
+    return buf;
+}
+
+static void* ffi_require_symbol(void* lib, const std::string& name, const char* fn) {
+    if (!lib) throw std::runtime_error(std::string(fn) + ": bad library handle.");
+    void* sym = ffi_symbol(lib, name);
+    if (!sym) throw std::runtime_error(std::string(fn) + ": symbol not found: " + name);
+    return sym;
+}
+
+// --- callInts(handle, symbol, arr) : int ---
+// Calls int f(int* data, int len) read-only over a copy of the array.
+static Value native_callInts(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    if (args.size() != 3) throw std::runtime_error("callInts expects 3 arguments.");
+    if (args[0].type != ValueType::INT) throw std::runtime_error("callInts expects an int handle.");
+    if (args[1].type != ValueType::STRING_CONST) throw std::runtime_error("callInts expects a String symbol.");
+    void* sym = ffi_require_symbol(ffi_get_lib(args[0].as.i), constants[args[1].as.str_idx], "callInts");
+    ArrayObject* arr = ffi_require_array(args, heap, 2, "callInts");
+    std::vector<int32_t> buf = ffi_flatten_ints(arr, "callInts");
+    typedef int (*FnBuf)(int*, int);
+    FnBuf fn = reinterpret_cast<FnBuf>(sym);
+    static_assert(sizeof(int) == 4, "FFI int must be 32-bit");
+    int r;
+    { GilRelease gil_released; r = fn(buf.data(), static_cast<int>(buf.size())); }
+    return Value((int32_t)r);
+}
+
+// --- callIntsMut(handle, symbol, arr) : int ---
+// Same call, then writes the buffer back into the array as Integers.
+// Array length is immutable from C.
+static Value native_callIntsMut(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    if (args.size() != 3) throw std::runtime_error("callIntsMut expects 3 arguments.");
+    if (args[0].type != ValueType::INT) throw std::runtime_error("callIntsMut expects an int handle.");
+    if (args[1].type != ValueType::STRING_CONST) throw std::runtime_error("callIntsMut expects a String symbol.");
+    void* sym = ffi_require_symbol(ffi_get_lib(args[0].as.i), constants[args[1].as.str_idx], "callIntsMut");
+    ArrayObject* arr = ffi_require_array(args, heap, 2, "callIntsMut");
+    std::vector<int32_t> buf = ffi_flatten_ints(arr, "callIntsMut");
+    typedef int (*FnBuf)(int*, int);
+    FnBuf fn = reinterpret_cast<FnBuf>(sym);
+    static_assert(sizeof(int) == 4, "FFI int must be 32-bit");
+    int r;
+    { GilRelease gil_released; r = fn(buf.data(), static_cast<int>(buf.size())); }
+    for (size_t i = 0; i < buf.size(); ++i) arr->data[i] = Value(buf[i]);
+    return Value((int32_t)r);
+}
+
 std::vector<NativeEntry>& registry() {
     static std::vector<NativeEntry> reg = {
         {native_len, 1},
@@ -865,6 +929,8 @@ std::vector<NativeEntry>& registry() {
         {native_callInt, 4},
         {native_callStr, 3},
         {native_join, 1},
+        {native_callInts, 3},
+        {native_callIntsMut, 3},
     };
     return reg;
 }
