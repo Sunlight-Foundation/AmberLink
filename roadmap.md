@@ -55,9 +55,8 @@ Development is split into phases, each building toward a robust, modern, high-pe
 
 - [x] **Threaded dispatch (computed gotos)** — replace the `switch` opcode loop with a jump table to eliminate branch misprediction; one of the highest-impact pure interpreter optimizations
 - [x] **GC collect threshold** — `collect()` was a full mark-and-sweep on every string concat; now gated on allocations-since-GC with an adaptive 2x-live threshold
-- [ ] **NaN-boxing** — pack `Value` into a single 64-bit double using NaN bits for type tags; cuts memory bandwidth and struct size significantly
-- [ ] **Register-based bytecode** — migrate AVM from stack-based to register-based instruction set to reduce unnecessary push/pop; significant rewrite but foundational for JIT
-- [ ] **Inline caching** — cache resolved field/method indices at call sites after first lookup; eliminates linear scans on repeat access
+- [x] **NaN-boxing** — evaluated: `Value` is already 8 bytes (tag + 4-byte payload), so packing gains nothing; not implemented
+- [x] **Inline caching** — evaluated: field/method dispatch is already monomorphic via compile-time resolution (measured zero delta, reverted); shipped hash-indexed maps instead
 - [ ] **Concurrency** — lightweight threads, `async`/`await`, or actor model
 - [x] **FFI** — call C functions from Amberlink (`loadLib`/`callInt`/`callStr` for int and string marshaling); access system libraries
 
@@ -102,6 +101,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 - [ ] **Package manager** — share and manage third-party Amberlink libraries
 
 ### Backends
+- [ ] **Register-based bytecode** — migrate AVM from stack-based to register-based instruction set to reduce unnecessary push/pop; significant rewrite, deferred until the language settles (post-1.0)
 - [ ] **Native compilation via LLVM** — compile `.amb` directly to native machine code through LLVM IR; inherits all LLVM optimizations; beats JVM on startup and memory
 - [ ] **AOT backend (`amber-native`)** — flesh out the existing C++ native codegen stub for platforms without LLVM
 - [ ] **JIT compilation** — compile hot bytecode paths to native code at runtime inside the AVM
