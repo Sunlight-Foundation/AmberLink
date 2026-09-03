@@ -1,0 +1,17 @@
+// net_test.amb
+// Exercises the networking natives (minimal HTTP/1.0 client, http:// only).
+// Needs a local test server (server echoes GET body / POST body):
+//   python <repo>/examples/resources/echo_server.py
+// Then: ambc examples/net_test.amb && avm examples/net_test.amc
+
+print "GET status: "
+print httpGet("http://127.0.0.1:8123/hello")
+
+print "GET missing returns empty: "
+print httpGet("http://127.0.0.1:9/nope")
+
+print "bad scheme returns empty: "
+print httpGet("https://example.com/")
+
+print "POST echo: "
+print httpPost("http://127.0.0.1:8123/echo", "ping-pong")

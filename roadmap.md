@@ -42,7 +42,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 ## Phase 4 — Ecosystem & Tooling (v0.7)
 *The "Mature" milestone — productive developer experience.*
 
-- [~] **Standard Library** — native string manipulation, math, file I/O, time, and process functions shipped (`stdlib/core.amb`, `stdlib/io.amb`); `HashMap`, `LinkedList`, and networking still pending
+- [x] **Standard Library** — native string manipulation, math, file I/O, time, process, `HashMap`/`LinkedList`, resource, and networking functions shipped (`stdlib/core.amb`, `stdlib/io.amb`, `stdlib/collections.amb`, `stdlib/net.amb`)
 - [x] **Module system** — `import` statements, multi-file projects
 - [x] **Amberlink Archive (`.ama`)** — packaged bytecode + resources, like Java JARs
 - [ ] **CLI (`make`)** — improved error handling, project scaffolding, watch mode

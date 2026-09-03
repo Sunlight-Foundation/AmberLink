@@ -10,6 +10,17 @@
 #include <sstream>
 #include "resources.hpp"
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#endif
+
 namespace Natives {
 
 static Value make_string_const(std::vector<std::string>& constants, const std::string& s) {
@@ -494,6 +505,123 @@ static Value native_resourceNames(std::vector<Value>& args, std::vector<std::str
     return make_string_const(constants, Resources::names());
 }
 
+// --- Minimal HTTP/1.0 client (http:// only, no TLS) ---
+// Fail-soft like readFile: any failure yields "".
+#ifdef _WIN32
+using sock_t = SOCKET;
+constexpr sock_t BAD_SOCK = INVALID_SOCKET;
+inline void close_sock(sock_t s) { closesocket(s); }
+#else
+using sock_t = int;
+constexpr sock_t BAD_SOCK = -1;
+inline void close_sock(sock_t s) { ::close(s); }
+#endif
+
+static bool http_fetch(const std::string& url, const std::string& method, const std::string& body, std::string& out_body) {
+    const std::string scheme = "http://";
+    if (url.compare(0, scheme.size(), scheme) != 0) return false;
+    std::string rest = url.substr(scheme.size());
+
+    std::string hostport, path = "/";
+    size_t slash = rest.find('/');
+    if (slash == std::string::npos) {
+        hostport = rest;
+    } else {
+        hostport = rest.substr(0, slash);
+        path = rest.substr(slash);
+        if (path.empty()) path = "/";
+    }
+    std::string host = hostport, port = "80";
+    size_t colon = hostport.rfind(':');
+    if (colon != std::string::npos) {
+        host = hostport.substr(0, colon);
+        port = hostport.substr(colon + 1);
+    }
+    if (host.empty() || port.empty()) return false;
+
+#ifdef _WIN32
+    static bool wsa_init = false;
+    if (!wsa_init) {
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
+        wsa_init = true;
+    }
+#endif
+
+    struct addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo* list = nullptr;
+    if (getaddrinfo(host.c_str(), port.c_str(), &hints, &list) != 0) return false;
+
+    sock_t sock = BAD_SOCK;
+    for (struct addrinfo* p = list; p; p = p->ai_next) {
+        sock_t s = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (s == BAD_SOCK) continue;
+        if (connect(s, p->ai_addr, static_cast<int>(p->ai_addrlen)) != 0) {
+            close_sock(s);
+            continue;
+        }
+        sock = s;
+        break;
+    }
+    freeaddrinfo(list);
+    if (sock == BAD_SOCK) return false;
+
+    std::ostringstream req;
+    req << method << " " << path << " HTTP/1.0\r\n"
+        << "Host: " << host << "\r\n"
+        << "Connection: close\r\n";
+    if (method == "POST") req << "Content-Length: " << body.size() << "\r\n";
+    req << "\r\n";
+    if (method == "POST") req << body;
+    std::string reqStr = req.str();
+
+    size_t sent = 0;
+    while (sent < reqStr.size()) {
+        int n = send(sock, reqStr.data() + sent, static_cast<int>(reqStr.size() - sent), 0);
+        if (n <= 0) { close_sock(sock); return false; }
+        sent += static_cast<size_t>(n);
+    }
+
+    std::string raw;
+    char buf[4096];
+    for (;;) {
+        int n = recv(sock, buf, sizeof(buf), 0);
+        if (n <= 0) break;
+        raw.append(buf, static_cast<size_t>(n));
+    }
+    close_sock(sock);
+
+    size_t hdrEnd = raw.find("\r\n\r\n");
+    if (hdrEnd == std::string::npos) return false;
+    out_body = raw.substr(hdrEnd + 4);
+    return true;
+}
+
+// --- httpGet(url) : String ---
+// Returns the response body, or "" on any failure / non-http URL.
+static Value native_httpGet(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)heap;
+    if (args.size() != 1) throw std::runtime_error("httpGet expects 1 argument.");
+    if (args[0].type != ValueType::STRING_CONST) throw std::runtime_error("httpGet expects a String URL.");
+    std::string out;
+    if (!http_fetch(constants[args[0].as.str_idx], "GET", "", out)) return make_string_const(constants, "");
+    return make_string_const(constants, out);
+}
+
+// --- httpPost(url, body) : String ---
+// POSTs body and returns the response body, or "" on any failure.
+static Value native_httpPost(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)heap;
+    if (args.size() != 2) throw std::runtime_error("httpPost expects 2 arguments.");
+    if (args[0].type != ValueType::STRING_CONST) throw std::runtime_error("httpPost expects a String URL.");
+    if (args[1].type != ValueType::STRING_CONST) throw std::runtime_error("httpPost expects a String body.");
+    std::string out;
+    if (!http_fetch(constants[args[0].as.str_idx], "POST", constants[args[1].as.str_idx], out)) return make_string_const(constants, "");
+    return make_string_const(constants, out);
+}
+
 std::vector<NativeEntry>& registry() {
     static std::vector<NativeEntry> reg = {
         {native_len, 1},
@@ -534,6 +662,8 @@ std::vector<NativeEntry>& registry() {
         {native_readResource, 1},
         {native_hasResource, 1},
         {native_resourceNames, 0},
+        {native_httpGet, 1},
+        {native_httpPost, 2},
     };
     return reg;
 }

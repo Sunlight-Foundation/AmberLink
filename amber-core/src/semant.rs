@@ -120,6 +120,9 @@ impl SymbolTable {
         register("readResource", 35, Type::String, vec![Type::String]);
         register("hasResource", 36, Type::Bool, vec![Type::String]);
         register("resourceNames", 37, Type::String, vec![]);
+        // Networking (minimal HTTP/1.0 client, http:// only). Order must match natives.cpp registry().
+        register("httpGet", 38, Type::String, vec![Type::String]);
+        register("httpPost", 39, Type::String, vec![Type::String, Type::String]);
     }
 
     pub fn get_var_type(&self, name: &str) -> Option<Type> {
