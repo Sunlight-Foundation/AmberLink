@@ -1,0 +1,32 @@
+// stdlib/collections.amb
+// HashMap and LinkedList collections, implemented as VM native functions.
+// These are registered as built-ins and callable from any Amberlink program
+// (no import needed). This file documents and exercises them.
+
+// --- HashMap ---
+// Create a map, then put/get/remove string-keyed values.
+var map = mapNew()
+mapPut(map, "name", "Amberlink")
+mapPut(map, "version", "0.7")
+String name = toString(mapGet(map, "name"))   // "Amberlink"
+bool hasName = mapContainsKey(map, "name")    // true
+bool hasToken = mapContainsKey(map, "token")  // false
+mapRemove(map, "version")                      // size drops to 1
+int size = mapSize(map)                        // 1
+
+// Keys can be any built-in value, not just strings.
+var byId = mapNew()
+mapPut(byId, 42, "the answer")
+print mapGet(byId, 42)                          // the answer
+
+// --- LinkedList ---
+// Create a list and add/remove from either end.
+var queue = llNew()
+llAddLast(queue, 10)
+llAddLast(queue, 20)
+llAddFirst(queue, 5)                            // [5, 10, 20]
+int n = llSize(queue)                           // 3
+print llGet(queue, 0)                           // 5
+print llRemoveFirst(queue)                      // 5
+print llRemoveLast(queue)                       // 20
+print llEmpty(queue)                            // false

@@ -179,6 +179,40 @@ Amberlink ships a set of built-in **native functions** implemented directly by t
 | `exit` | `void exit(int status)` | Terminates the program with the given status. |
 | `sleep` | `void sleep(int ms)` | Pauses execution for `ms` milliseconds. |
 
+### Collections (HashMap, LinkedList)
+Dynamic collections backed by VM heap objects. Keys and values can be any built-in value.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `mapNew` | `HashMap mapNew()` | Creates an empty map. |
+| `mapPut` | `void mapPut(HashMap, key, value)` | Inserts or replaces a key. |
+| `mapGet` | `value mapGet(HashMap, key)` | Value for key, or `0` if absent. |
+| `mapContainsKey` | `bool mapContainsKey(HashMap, key)` | Whether the key exists. |
+| `mapRemove` | `void mapRemove(HashMap, key)` | Removes a key. |
+| `mapSize` | `int mapSize(HashMap)` | Number of entries. |
+| `llNew` | `LinkedList llNew()` | Creates an empty list. |
+| `llAddFirst` | `void llAddFirst(LinkedList, value)` | Insert at the front. |
+| `llAddLast` | `void llAddLast(LinkedList, value)` | Append at the end. |
+| `llRemoveFirst` | `value llRemoveFirst(LinkedList)` | Remove and return the front. |
+| `llRemoveLast` | `value llRemoveLast(LinkedList)` | Remove and return the end. |
+| `llGet` | `value llGet(LinkedList, int)` | Value at an index. |
+| `llSize` | `int llSize(LinkedList)` | Number of items. |
+| `llEmpty` | `bool llEmpty(LinkedList)` | Whether the list is empty. |
+
+Example:
+```java
+var scores = mapNew()
+mapPut(scores, "alice", 90)
+print mapGet(scores, "alice")        // 90
+print mapContainsKey(scores, "bob")  // false
+
+var tasks = llNew()
+llAddLast(tasks, "build")
+llAddLast(tasks, "test")
+print llRemoveFirst(tasks)           // build
+print llSize(tasks)                  // 1
+```
+
 Example:
 ```java
 String greeting = strToUpper(strSubstring("hello world", 0, 5))

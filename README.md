@@ -4,7 +4,7 @@ A Java alternative that doesn't hate you.
 
 Amberlink is a statically typed, multi-paradigm language built to give Java developers a cleaner home. Same familiar structure — classes, interfaces, strong typing — without the ceremony. Run on the Amber Virtual Machine or compile to a native binary. Your choice.
 
-> **Status: v0.6 Beta — Phase 4 (Ecosystem & Tooling) in progress.**
+> **Status: v0.7 Beta — Phase 4 (Ecosystem & Tooling) in progress.**
 
 ---
 

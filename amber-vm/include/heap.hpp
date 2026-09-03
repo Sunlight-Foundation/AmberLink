@@ -13,7 +13,9 @@ enum class ObjType {
     STRING,
     ARRAY,
     INSTANCE,
-    LIST
+    LIST,
+    HASH_MAP,
+    LINKED_LIST
 };
 
 struct AmberObject {
@@ -34,6 +36,27 @@ struct ListObject : AmberObject {
     std::vector<Value> items;
     ListObject() {
         type = ObjType::LIST;
+    }
+};
+
+// A key/value pair stored in a HashMapObject.
+struct HashEntry {
+    Value key;
+    Value value;
+    HashEntry(const Value& k, const Value& v) : key(k), value(v) {}
+};
+
+struct HashMapObject : AmberObject {
+    std::vector<HashEntry> entries;
+    HashMapObject() {
+        type = ObjType::HASH_MAP;
+    }
+};
+
+struct LinkedListObject : AmberObject {
+    std::vector<Value> items;
+    LinkedListObject() {
+        type = ObjType::LINKED_LIST;
     }
 };
 
