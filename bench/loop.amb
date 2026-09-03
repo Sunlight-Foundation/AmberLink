@@ -1,0 +1,10 @@
+// bench/loop.amb — integer arithmetic + jumps. Higher is worse.
+float t0 = clock()
+int s = 0
+int i = 0
+while i < 10000000 {
+    s = s + i
+    i = i + 1
+}
+print i
+print clock() - t0

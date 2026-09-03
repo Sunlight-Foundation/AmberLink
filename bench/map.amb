@@ -1,0 +1,18 @@
+// bench/map.amb — HashMap put/get throughput. Higher is worse.
+// NOTE: map lookup is currently a linear scan (O(n)), so N is kept small;
+// a hash-indexed map is future work.
+float t0 = clock()
+var m = mapNew()
+int i = 0
+while i < 10000 {
+    mapPut(m, i, i * 2)
+    i = i + 1
+}
+int s = 0
+int j = 0
+while j < 10000 {
+    s = s + mapGet(m, j)
+    j = j + 1
+}
+print j
+print clock() - t0

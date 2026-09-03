@@ -1,0 +1,16 @@
+// bench/list.amb — LinkedList add/get throughput. Higher is worse.
+float t0 = clock()
+var ll = llNew()
+int i = 0
+while i < 200000 {
+    llAddLast(ll, i)
+    i = i + 1
+}
+int s = 0
+int j = 0
+while j < 200000 {
+    s = s + llGet(ll, j)
+    j = j + 1
+}
+print j
+print clock() - t0
