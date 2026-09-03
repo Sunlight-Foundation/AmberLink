@@ -66,7 +66,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 *Small, safe wins: compiler-side and marshaling-layer only, zero VM risk.*
 
 - [x] **Constant folding** — fold literal expressions at compile time (`optimizer.rs`, on by default, `--no-opt` escape hatch)
-- [ ] **FFI array/buffer marshaling** — pass arrays and byte buffers to C functions (numeric-kernel offload)
+- [x] **FFI array/buffer marshaling** — pass arrays and byte buffers to C functions (numeric-kernel offload)
 
 ---
 

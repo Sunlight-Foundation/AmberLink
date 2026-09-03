@@ -232,7 +232,7 @@ the new opcode; old VMs reject new programs with the existing unknown-opcode err
 5. One real bug class found in testing: a finished-but-unjoined thread is still
    joinable, so the fast path must reap it too — or process exit aborts.
 
-## 6. FFI Array/Buffer Marshaling Design (proposed, not yet implemented)
+## 6. FFI Array/Buffer Marshaling Design (implemented as specified, with notes below)
 
 Goal: let numeric kernels live in C (the NumPy arrangement - slow glue language,
 fast kernels) by passing Amberlink arrays to C functions. Follows the v1 FFI
@@ -294,3 +294,11 @@ the same pattern as the Python echo server for networking tests.
    (simpler surface, pays an O(n) copy for read-only kernels).
 2. Whether `char`/byte arrays deserve their own entry point or wait for a
    proper bytes type.
+
+### Implementation notes (decisions taken while building)
+
+1. Kept the two-function split: read-only kernels skip the copy-back entirely.
+2. `char` arrays wait for a bytes type (int arrays only in v1).
+3. Length is derived from the array, so there is no length argument to get wrong;
+   empty arrays pass a possibly-null pointer with length 0, which well-behaved
+   C functions handle like any zero-length call.

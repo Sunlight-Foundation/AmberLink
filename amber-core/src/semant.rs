@@ -130,6 +130,9 @@ impl SymbolTable {
         register("callStr", 43, Type::Int, vec![Type::Int, Type::String, Type::String]);
         // Threads: join(handle) blocks and yields the worker's return value.
         register("join", 44, Type::Unknown, vec![Type::Int]);
+        // FFI buffers: int f(int*, int) over Array contents, length derived.
+        register("callInts", 45, Type::Int, vec![Type::Int, Type::String, Type::Unknown]);
+        register("callIntsMut", 46, Type::Int, vec![Type::Int, Type::String, Type::Unknown]);
     }
 
     pub fn get_var_type(&self, name: &str) -> Option<Type> {
