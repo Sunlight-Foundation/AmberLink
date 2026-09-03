@@ -44,12 +44,9 @@ Development is split into phases, each building toward a robust, modern, high-pe
 
 - [~] **Standard Library** — native string manipulation, math, file I/O, time, and process functions shipped (`stdlib/core.amb`, `stdlib/io.amb`); `HashMap`, `LinkedList`, and networking still pending
 - [x] **Module system** — `import` statements, multi-file projects
-- [ ] **Amberlink Archive (`.ama`)** — packaged bytecode + resources, like Java JARs
+- [x] **Amberlink Archive (`.ama`)** — packaged bytecode + resources, like Java JARs
 - [ ] **CLI (`make`)** — improved error handling, project scaffolding, watch mode
 - [~] **Compiler improvements** — descriptive error messages with `line:col` and error recovery in the parser/emitter (`error.rs`, `synchronize()`), static type checking in `semant.rs`; backend IR design still pending
-- [ ] **Language Server (LSP)** — autocompletion and error highlighting for VS Code / IntelliJ
-- [ ] **Debugger** — step through code, inspect variables, view the stack
-- [ ] **Package manager** — share and manage third-party Amberlink libraries
 
 ---
 
@@ -60,10 +57,6 @@ Development is split into phases, each building toward a robust, modern, high-pe
 - [ ] **NaN-boxing** — pack `Value` into a single 64-bit double using NaN bits for type tags; cuts memory bandwidth and struct size significantly
 - [ ] **Register-based bytecode** — migrate AVM from stack-based to register-based instruction set to reduce unnecessary push/pop; significant rewrite but foundational for JIT
 - [ ] **Inline caching** — cache resolved field/method indices at call sites after first lookup; eliminates linear scans on repeat access
-- [ ] **Native compilation via LLVM** — compile `.amb` directly to native machine code through LLVM IR; inherits all LLVM optimizations; beats JVM on startup and memory
-- [ ] **AOT backend (`amber-native`)** — flesh out the existing C++ native codegen stub for platforms without LLVM
-- [ ] **JIT compilation** — compile hot bytecode paths to native code at runtime inside the AVM
-- [ ] **WASM target** — compile Amberlink to WebAssembly for browser execution
 - [ ] **Concurrency** — lightweight threads, `async`/`await`, or actor model
 - [ ] **FFI** — call C functions from Amberlink; access system libraries
 
@@ -76,6 +69,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 - [ ] **Generics** — type parameters (`List<T>`, `Map<K, V>`)
 - [ ] **Exception handling** — `try`, `catch`, `throw`
 - [ ] **Pattern matching** — `match` expressions
+- [ ] **Multi-module archives (upgraded .AMB files)** — separately-compiled modules with runtime linking/loading inside `.ama` (true multi-unit JARs); extends the single-unit archive
 
 ---
 
@@ -95,3 +89,19 @@ Development is split into phases, each building toward a robust, modern, high-pe
 - [ ] Contributing guide
 - [ ] Tutorials / cookbook
 - [ ] Community channels (forum, Discord, etc.)
+
+---
+
+## MISC — Later / Unscheduled
+*Worth doing, but premature until the language, bytecode, and stdlib stabilize.*
+
+### Tooling
+- [ ] **Language Server (LSP)** — autocompletion and error highlighting for VS Code / IntelliJ
+- [ ] **Debugger** — step through code, inspect variables, view the stack
+- [ ] **Package manager** — share and manage third-party Amberlink libraries
+
+### Backends
+- [ ] **Native compilation via LLVM** — compile `.amb` directly to native machine code through LLVM IR; inherits all LLVM optimizations; beats JVM on startup and memory
+- [ ] **AOT backend (`amber-native`)** — flesh out the existing C++ native codegen stub for platforms without LLVM
+- [ ] **JIT compilation** — compile hot bytecode paths to native code at runtime inside the AVM
+- [ ] **WASM target** — compile Amberlink to WebAssembly for browser execution

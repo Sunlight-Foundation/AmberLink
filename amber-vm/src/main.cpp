@@ -10,7 +10,15 @@ int main(int argc, char* argv[]) {
 
     std::vector<uint8_t> bytecode;
     std::vector<std::string> constants;
-    if (!Loader::load(argv[1], bytecode, constants)) {
+
+    // Amberlink Archives (.ama) bundle the compiled program plus resources.
+    std::string arg = argv[1];
+    bool isArchive = arg.size() >= 4 && arg.compare(arg.size() - 4, 4, ".ama") == 0;
+
+    bool ok = isArchive
+        ? Loader::loadArchive(argv[1], bytecode, constants)
+        : Loader::load(argv[1], bytecode, constants);
+    if (!ok) {
         return 1;
     }
 

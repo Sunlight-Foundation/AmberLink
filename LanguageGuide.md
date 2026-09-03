@@ -251,3 +251,31 @@ int twice(int n) { return n * 2 }
 import "shapes.amb"
 int triple(int n) { return n * 3 }
 ```
+
+## 10. Archives (`.ama`)
+
+An Amberlink Archive packages a compiled program plus its data files into one distributable file — the analog of a Java JAR for the current single-unit model.
+
+### Building an archive
+```sh
+ambc examples/archive_test.amb --archive app.ama --resource welcome=examples/resources/welcome.txt
+```
+`--resource name=path` can be repeated to bundle multiple files. The compiled program is stored under the reserved entry `main`; every `--resource` becomes a named entry.
+
+### Running an archive
+```sh
+avm app.ama
+```
+`avm` detects the `.ama` extension, extracts `main`, and runs it. Resources stay inside the archive — no extraction to disk.
+
+### Reading resources at runtime
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `readResource` | `String readResource(String)` | Contents of a bundled resource, or `""` if absent. |
+| `hasResource` | `bool hasResource(String)` | Whether a bundled resource exists. |
+| `resourceNames` | `String resourceNames()` | All bundled resource names, newline-separated. |
+
+```java
+print hasResource("welcome")   // true
+print readResource("welcome")  // file contents
+```

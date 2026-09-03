@@ -1,6 +1,4 @@
 // amber-core/src/codegen/emitter.rs
-use std::fs::File;
-use std::io::{Write, BufWriter};
 use super::bytecode::OpCode;
 use crate::ast::{Expr, Op};
 use crate::ast::Stmt;
@@ -715,21 +713,26 @@ impl Emitter {
     }
 
     pub fn write_file(&self, path: &str) -> std::io::Result<()> {
-        let file = File::create(path)?;
-        let mut writer = BufWriter::new(file);
-        writer.write_all(b"AMBR")?; // Magic
-        writer.write_all(&1u16.to_le_bytes())?; // Version
-        writer.write_all(&0u32.to_le_bytes())?; // Entry point placeholder
+        std::fs::write(path, Self::to_bytes(self))?;
+        Ok(())
+    }
+
+    // Serializes the compiled program to the .amc binary format in memory.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out: Vec<u8> = Vec::new();
+        out.extend_from_slice(b"AMBR"); // Magic
+        out.extend_from_slice(&1u16.to_le_bytes()); // Version
+        out.extend_from_slice(&0u32.to_le_bytes()); // Entry point placeholder
 
         // Write Constant Pool
-        writer.write_all(&(self.constants.len() as u32).to_le_bytes())?;
+        out.extend_from_slice(&(self.constants.len() as u32).to_le_bytes());
         for s in &self.constants {
-            writer.write_all(&(s.len() as u32).to_le_bytes())?;
-            writer.write_all(s.as_bytes())?;
+            out.extend_from_slice(&(s.len() as u32).to_le_bytes());
+            out.extend_from_slice(s.as_bytes());
         }
 
-        writer.write_all(&(self.code.len() as u32).to_le_bytes())?;
-        writer.write_all(&self.code)?;
-        Ok(())
+        out.extend_from_slice(&(self.code.len() as u32).to_le_bytes());
+        out.extend_from_slice(&self.code);
+        out
     }
 }

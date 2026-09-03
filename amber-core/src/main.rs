@@ -115,6 +115,51 @@ fn main() {
     }
 
     let filename = &args[1];
+
+    // Parse optional flags after the source file:
+    //   ambc <file.amb> [--archive out.ama] [--resource name=path]...
+    let mut archive_out: Option<String> = None;
+    let mut resources: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--archive" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Error: --archive requires an output path");
+                    process::exit(1);
+                }
+                archive_out = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--resource" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Error: --resource requires name=path");
+                    process::exit(1);
+                }
+                let spec = args[i + 1].clone();
+                let (name, path) = match spec.split_once('=') {
+                    Some((n, p)) => (n.to_string(), p.to_string()),
+                    None => {
+                        eprintln!("Error: --resource must be name=path, got '{}'", spec);
+                        process::exit(1);
+                    }
+                };
+                match fs::read(&path) {
+                    Ok(data) => resources.push((name, data)),
+                    Err(e) => {
+                        eprintln!("Error: could not read resource '{}': {}", path, e);
+                        process::exit(1);
+                    }
+                }
+                i += 2;
+            }
+            other => {
+                eprintln!("Error: unexpected argument '{}'", other);
+                process::exit(1);
+            }
+        }
+    }
+
     let main_path = Path::new(filename);
 
     // Parse and load the main module plus all transitive imports.
@@ -147,4 +192,13 @@ fn main() {
     let output_path = filename.replace(".amb", ".amc");
     emitter.write_file(&output_path).expect("Failed to write file");
     println!("Amberlink: Compiled {} ({} modules) to {}", filename, ordered_paths.len(), output_path);
+
+    // If requested, wrap the compiled program plus bundled resources in a .ama archive.
+    if let Some(archive_path) = archive_out {
+        let resource_count = resources.len();
+        let bytecode = emitter.to_bytes();
+        let ama = codegen::archive::build_archive(bytecode, resources);
+        fs::write(&archive_path, ama).expect("Failed to write archive");
+        println!("Amberlink: Wrote archive {} ({} resources)", archive_path, resource_count);
+    }
 }

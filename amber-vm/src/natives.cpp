@@ -8,6 +8,7 @@
 #include <thread>
 #include <fstream>
 #include <sstream>
+#include "resources.hpp"
 
 namespace Natives {
 
@@ -467,6 +468,32 @@ static Value native_llEmpty(std::vector<Value>& args, std::vector<std::string>& 
     return Value(ll->items.empty());
 }
 
+// --- readResource(name) : String ---
+// Returns the contents of a bundled .ama resource, or "" if absent.
+static Value native_readResource(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)heap;
+    if (args.size() != 1) throw std::runtime_error("readResource expects 1 argument.");
+    if (args[0].type != ValueType::STRING_CONST) throw std::runtime_error("readResource expects a String name.");
+    const std::string* content = Resources::get(constants[args[0].as.str_idx]);
+    return make_string_const(constants, content ? *content : "");
+}
+
+// --- hasResource(name) : bool ---
+// Whether a bundled resource exists in the archive.
+static Value native_hasResource(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)heap;
+    if (args.size() != 1) throw std::runtime_error("hasResource expects 1 argument.");
+    if (args[0].type != ValueType::STRING_CONST) throw std::runtime_error("hasResource expects a String name.");
+    return Value(Resources::has(constants[args[0].as.str_idx]));
+}
+
+// --- resourceNames() : String ---
+// All bundled resource names, newline-separated.
+static Value native_resourceNames(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)args; (void)heap;
+    return make_string_const(constants, Resources::names());
+}
+
 std::vector<NativeEntry>& registry() {
     static std::vector<NativeEntry> reg = {
         {native_len, 1},
@@ -504,6 +531,9 @@ std::vector<NativeEntry>& registry() {
         {native_llGet, 2},
         {native_llSize, 1},
         {native_llEmpty, 1},
+        {native_readResource, 1},
+        {native_hasResource, 1},
+        {native_resourceNames, 0},
     };
     return reg;
 }

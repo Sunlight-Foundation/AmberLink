@@ -15,6 +15,9 @@
 # Amberlink Compiled Bytecode
 *.amc
 
+# Amberlink Archives (build artifacts, reproducible via ambc --archive)
+*.ama
+
 # System / IDE
 .DS_Store
 .vscode/

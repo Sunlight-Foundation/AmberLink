@@ -116,6 +116,10 @@ impl SymbolTable {
         register("llGet", 32, Type::Unknown, vec![Type::Unknown, Type::Int]);
         register("llSize", 33, Type::Int, vec![Type::Unknown]);
         register("llEmpty", 34, Type::Bool, vec![Type::Unknown]);
+        // Archives (packaged resources in a .ama). Order must match natives.cpp registry().
+        register("readResource", 35, Type::String, vec![Type::String]);
+        register("hasResource", 36, Type::Bool, vec![Type::String]);
+        register("resourceNames", 37, Type::String, vec![]);
     }
 
     pub fn get_var_type(&self, name: &str) -> Option<Type> {
