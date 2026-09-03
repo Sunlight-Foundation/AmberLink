@@ -2,6 +2,7 @@
 #include "bytecode.hpp"
 #include "heap.hpp"
 #include "value.hpp"
+#include "natives.hpp"
 #include <iostream>
 #include <vector>
 #include <stack>
@@ -31,6 +32,10 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
     std::vector<const uint8_t*> call_stack;
     std::vector<size_t> fp_stack;
     size_t fp = 0;
+
+    // Reused across native calls (declared at function scope so computed-goto
+    // dispatch never jumps across its construction/destruction).
+    std::vector<Value> native_args;
 
     const uint8_t* ip = bytecode.data();
     const uint8_t* end = ip + bytecode.size();
@@ -77,6 +82,7 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
             dispatch_table[OP_LIST_SIZE]      = &&lbl_OP_LIST_SIZE;
             dispatch_table[OP_CALL]           = &&lbl_OP_CALL;
             dispatch_table[OP_RETURN]         = &&lbl_OP_RETURN;
+            dispatch_table[OP_CALL_NATIVE]    = &&lbl_OP_CALL_NATIVE;
             dispatch_table[OP_POP]            = &&lbl_OP_POP;
             dispatch_table[OP_PRINT]          = &&lbl_OP_PRINT;
             table_init = true;
@@ -397,6 +403,22 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
             fp = fp_stack.back(); fp_stack.pop_back();
             DISPATCH();
         }
+        lbl_OP_CALL_NATIVE: {
+            uint16_t native_id;
+            std::memcpy(&native_id, ip, 2); ip += 2;
+            auto& natives = Natives::registry();
+            if (native_id >= natives.size()) throw std::runtime_error("Unknown native function ID.");
+            NativeEntry& entry = natives[native_id];
+            if (vm_stack.size() < (size_t)entry.arity) throw std::runtime_error("Stack underflow during CALL_NATIVE.");
+            // Pop args in reverse so the args vector is in call order.
+            native_args.resize(entry.arity);
+            for (int i = entry.arity - 1; i >= 0; --i) {
+                native_args[i] = vm_stack.back(); vm_stack.pop_back();
+            }
+            Value result = entry.fn(native_args, constants, gc);
+            vm_stack.push_back(result);
+            DISPATCH();
+        }
         lbl_OP_POP:
             vm_stack.pop_back();
             DISPATCH();
@@ -700,6 +722,20 @@ void execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& con
                     vm_stack.push_back(result);
                     ip = call_stack.back(); call_stack.pop_back();
                     fp = fp_stack.back(); fp_stack.pop_back(); break;
+                }
+                case OP_CALL_NATIVE: {
+                    uint16_t native_id;
+                    std::memcpy(&native_id, ip, 2); ip += 2;
+                    auto& natives = Natives::registry();
+                    if (native_id >= natives.size()) throw std::runtime_error("Unknown native function ID.");
+                    NativeEntry& entry = natives[native_id];
+                    if (vm_stack.size() < (size_t)entry.arity) throw std::runtime_error("Stack underflow during CALL_NATIVE.");
+                    native_args.resize(entry.arity);
+                    for (int i = entry.arity - 1; i >= 0; --i) {
+                        native_args[i] = vm_stack.back(); vm_stack.pop_back();
+                    }
+                    Value result = entry.fn(native_args, constants, gc);
+                    vm_stack.push_back(result); break;
                 }
                 case OP_POP: vm_stack.pop_back(); break;
                 case OP_PRINT: {

@@ -11,5 +11,6 @@ add_executable(avm
     src/loader.cpp
     src/main.cpp
     src/memory.cpp
+    src/natives.cpp
     src/roots.cpp
 )

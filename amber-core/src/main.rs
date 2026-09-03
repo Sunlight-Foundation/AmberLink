@@ -28,6 +28,7 @@ fn main() {
 
     // 2. Parse & Semantic Analysis
     let mut symbols = SymbolTable::new();
+    symbols.init_native_registry();
     let mut parser = Parser::new(tokens);
     let ast = parser.parse(&mut symbols);
 

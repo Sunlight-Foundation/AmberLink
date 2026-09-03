@@ -33,10 +33,20 @@ pub struct InterfaceInfo {
     pub method_signatures: Vec<(String, crate::ast::Type, Vec<(String, crate::ast::Type)>)>,
 }
 
+// A built-in native function implemented in the VM (C++), callable from Amberlink source.
+#[derive(Clone)]
+pub struct NativeInfo {
+    pub name: String,
+    pub id: u16,
+    pub param_types: Vec<crate::ast::Type>,
+    pub return_type: crate::ast::Type,
+}
+
 pub struct SymbolTable {
     pub functions: HashMap<String, FunctionInfo>,
     pub classes: HashMap<String, ClassInfo>,
     pub interfaces: HashMap<String, InterfaceInfo>,
+    pub natives: HashMap<String, NativeInfo>,
     pub variables: HashMap<String, u32>,
     pub locals: HashMap<String, u32>,
     pub variable_types: HashMap<String, crate::ast::Type>,
@@ -50,12 +60,32 @@ impl SymbolTable {
             functions: HashMap::new(),
             classes: HashMap::new(),
             interfaces: HashMap::new(),
+            natives: HashMap::new(),
             variables: HashMap::new(),
             locals: HashMap::new(),
             variable_types: HashMap::new(),
             next_var_index: 0,
             next_local_index: 0,
         }
+    }
+
+    // Registers the built-in native functions. IDs must match the registry
+    // order in amber-vm/src/natives.cpp (Natives::registry()).
+    pub fn init_native_registry(&mut self) {
+        use crate::ast::Type;
+        let mut register = |name: &str, id: u16, return_type: Type, param_types: Vec<Type>| {
+            self.natives.insert(
+                name.to_string(),
+                NativeInfo { name: name.to_string(), id, param_types, return_type },
+            );
+        };
+        // Order must match natives.cpp registry().
+        register("len", 0, Type::Int, vec![Type::String]);
+        register("input", 1, Type::String, vec![]);
+        register("toString", 2, Type::String, vec![Type::Int]);
+        register("toInt", 3, Type::Int, vec![Type::String]);
+        register("toFloat", 4, Type::Float, vec![Type::String]);
+        register("abs", 5, Type::Float, vec![Type::Float]);
     }
 
     pub fn get_var_type(&self, name: &str) -> Option<Type> {
@@ -99,7 +129,11 @@ impl SymbolTable {
             }
             Expr::ListSize(_) => Some(Type::Int),
             Expr::Call(name, _) => {
-                self.functions.get(name).map(|f| f.return_type.clone())
+                if let Some(f) = self.functions.get(name) {
+                    Some(f.return_type.clone())
+                } else {
+                    self.natives.get(name).map(|n| n.return_type.clone())
+                }
             }
             _ => None,
         }

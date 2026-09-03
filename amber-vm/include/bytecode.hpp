@@ -51,6 +51,7 @@ enum OpCode : uint8_t {
     // --- Functions & Calls ---
     OP_CALL           = 0x30, // Call function at 4-byte address
     OP_RETURN         = 0x31, // Return from function
+    OP_CALL_NATIVE    = 0x32, // Operand: Native ID (u16). Pop args, call C++ native, push result.
 
     // --- Utilities ---
     OP_POP            = 0x80, // Pop the top value from the stack and discard it
