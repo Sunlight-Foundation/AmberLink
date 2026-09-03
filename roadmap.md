@@ -62,9 +62,18 @@ Development is split into phases, each building toward a robust, modern, high-pe
 
 ---
 
+## Phase 5.5 — Point Release (v0.7.x)
+*Small, safe wins: compiler-side and marshaling-layer only, zero VM risk.*
+
+- [x] **Constant folding** — fold literal expressions at compile time (`optimizer.rs`, on by default, `--no-opt` escape hatch)
+- [ ] **FFI array/buffer marshaling** — pass arrays and byte buffers to C functions (numeric-kernel offload)
+
+---
+
 ## Phase 6 — Advanced Language Features (v0.9)
 *The "Expressive" milestone — sophisticated type system.*
 
+- [ ] **LLVM AOT backend** — compile `.amb` to native machine code through LLVM IR (headline: AVM for iteration, LLVM for release builds; makes a register VM unnecessary via `mem2reg`)
 - [ ] **Null safety** — non-nullable by default, optional types
 - [ ] **Generics** — type parameters (`List<T>`, `Map<K, V>`)
 - [ ] **Exception handling** — `try`, `catch`, `throw`
@@ -101,8 +110,6 @@ Development is split into phases, each building toward a robust, modern, high-pe
 - [ ] **Package manager** — share and manage third-party Amberlink libraries
 
 ### Backends
-- [ ] **Register-based bytecode** — migrate AVM from stack-based to register-based instruction set to reduce unnecessary push/pop; significant rewrite, deferred until the language settles (post-1.0)
-- [ ] **Native compilation via LLVM** — compile `.amb` directly to native machine code through LLVM IR; inherits all LLVM optimizations; beats JVM on startup and memory
 - [ ] **AOT backend (`amber-native`)** — flesh out the existing C++ native codegen stub for platforms without LLVM
 - [ ] **JIT compilation** — compile hot bytecode paths to native code at runtime inside the AVM
 - [ ] **WASM target** — compile Amberlink to WebAssembly for browser execution
