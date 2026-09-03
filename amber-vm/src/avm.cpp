@@ -4,6 +4,7 @@
 #include "value.hpp"
 #include "natives.hpp"
 #include "vm.hpp"
+#include "threads.hpp"
 #include <iostream>
 #include <vector>
 #include <stack>
@@ -20,7 +21,19 @@
 #endif
 
 static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> args,
-                    bool is_main, Value& out_result);
+                    bool is_main, Value& out_result, std::string& out_error);
+
+// Prints one value with the output lock held (threads share stdout).
+static void print_value(const Value& val, std::vector<std::string>& constants) {
+    std::lock_guard<std::mutex> out_lock(g_out_mutex);
+    if (val.type == ValueType::STRING_CONST) {
+        size_t idx = val.as.str_idx;
+        if (idx < constants.size()) std::cout << constants[idx] << std::endl;
+        else std::cout << "<Invalid String Index>" << std::endl;
+    } else {
+        std::cout << val << std::endl;
+    }
+}
 
 int execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& constants) {
     if (bytecode.empty()) {
@@ -33,7 +46,39 @@ int execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& cons
     vm.constants = &constants;
     std::vector<Value> no_args;
     Value result;
-    return run_loop(vm, bytecode.data(), no_args, true, result);
+    std::string err;
+    int rc;
+    {
+        GilHold hold;
+        rc = run_loop(vm, bytecode.data(), no_args, true, result, err);
+    }
+    // Main invocation is done and the GIL is released: reap any threads the
+    // program never joined (a live worker here blocks, like Java non-daemons).
+    threads_join_all();
+    return rc;
+}
+
+// Entry point for spawned threads. Records its outcome on its slot for join().
+static void thread_entry(VMContext* vm, int32_t addr, std::vector<Value> args,
+                         std::shared_ptr<ThreadSlot> slot) {
+    GilHold hold;
+    Value result;
+    std::string err;
+    int rc = 0;
+    try {
+        rc = run_loop(*vm, vm->bytecode->data() + addr, std::move(args), false, result, err);
+    } catch (const std::exception& e) {
+        err = e.what();
+        rc = 1;
+    } catch (...) {
+        err = "unknown thread error";
+        rc = 1;
+    }
+    std::lock_guard<std::mutex> lk(slot->m);
+    slot->result = result;
+    slot->error = err;
+    slot->code = rc;
+    slot->finished = true;
 }
 
 // The interpreter loop, shared by the main thread and (in a later slice)
@@ -41,9 +86,7 @@ int execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& cons
 // what threads share. is_main/out_result are dormant until OP_SPAWN lands;
 // they fix the call shape now so the next slice touches no signatures.
 static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> args,
-                    bool is_main, Value& out_result) {
-    (void)is_main; (void)out_result;
-
+                    bool is_main, Value& out_result, std::string& out_error) {
     std::vector<Value> vm_stack(std::move(args));
     vm_stack.reserve(1024);
 
@@ -57,6 +100,9 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
     // Reused across native calls (declared at function scope so computed-goto
     // dispatch never jumps across its construction/destruction).
     std::vector<Value> native_args;
+    // Reused scratch for OP_SPAWN, for the same reason.
+    std::vector<Value> spawn_args;
+    std::pair<int32_t, std::shared_ptr<ThreadSlot>> spawn_pair;
 
     const uint8_t* ip = start_ip;
     const uint8_t* end = vm.bytecode->data() + vm.bytecode->size();
@@ -104,6 +150,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             dispatch_table[OP_CALL]           = &&lbl_OP_CALL;
             dispatch_table[OP_RETURN]         = &&lbl_OP_RETURN;
             dispatch_table[OP_CALL_NATIVE]    = &&lbl_OP_CALL_NATIVE;
+            dispatch_table[OP_SPAWN]          = &&lbl_OP_SPAWN;
             dispatch_table[OP_POP]            = &&lbl_OP_POP;
             dispatch_table[OP_PRINT]          = &&lbl_OP_PRINT;
             table_init = true;
@@ -416,7 +463,15 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             DISPATCH();
         }
         lbl_OP_RETURN: {
-            if (call_stack.empty()) throw std::runtime_error("RETURN with empty call stack.");
+            if (call_stack.empty()) {
+                if (!is_main) {
+                    // Worker thread ran off its entry function: this is its result.
+                    if (!vm_stack.empty()) { out_result = vm_stack.back(); vm_stack.pop_back(); }
+                    else out_result = Value();
+                    return 0;
+                }
+                throw std::runtime_error("RETURN with empty call stack.");
+            }
             Value result = vm_stack.back(); vm_stack.pop_back();
             vm_stack.resize(fp);
             vm_stack.push_back(result);
@@ -440,19 +495,27 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             vm_stack.push_back(result);
             DISPATCH();
         }
+        lbl_OP_SPAWN: {
+            int32_t target_offset; std::memcpy(&target_offset, ip, 4); ip += 4;
+            uint8_t arg_count = *ip++;
+            if (vm_stack.size() < arg_count) throw std::runtime_error("Stack underflow during SPAWN.");
+            spawn_args.resize(arg_count);
+            for (int i = arg_count - 1; i >= 0; --i) {
+                spawn_args[i] = vm_stack.back(); vm_stack.pop_back();
+            }
+            spawn_pair = threads_alloc();
+            spawn_pair.second->th = std::thread(thread_entry, &vm, target_offset,
+                                                std::move(spawn_args), spawn_pair.second);
+            vm_stack.push_back(Value(spawn_pair.first));
+            DISPATCH();
+        }
         lbl_OP_POP:
             vm_stack.pop_back();
             DISPATCH();
         lbl_OP_PRINT: {
             if (vm_stack.empty()) throw std::runtime_error("Stack underflow during PRINT.");
             Value val = vm_stack.back(); vm_stack.pop_back();
-            if (val.type == ValueType::STRING_CONST) {
-                size_t idx = val.as.str_idx;
-                if (idx < constants.size()) std::cout << constants[idx] << std::endl;
-                else std::cout << "<Invalid String Index>" << std::endl;
-            } else {
-                std::cout << val << std::endl;
-            }
+            print_value(val, constants);
             DISPATCH();
         }
         lbl_UNKNOWN:
@@ -737,7 +800,14 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     ip = vm.bytecode->data() + target_offset; break;
                 }
                 case OP_RETURN: {
-                    if (call_stack.empty()) throw std::runtime_error("RETURN with empty call stack.");
+                    if (call_stack.empty()) {
+                        if (!is_main) {
+                            if (!vm_stack.empty()) { out_result = vm_stack.back(); vm_stack.pop_back(); }
+                            else out_result = Value();
+                            return 0;
+                        }
+                        throw std::runtime_error("RETURN with empty call stack.");
+                    }
                     Value result = vm_stack.back(); vm_stack.pop_back();
                     vm_stack.resize(fp);
                     vm_stack.push_back(result);
@@ -758,17 +828,24 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     Value result = entry.fn(native_args, constants, gc);
                     vm_stack.push_back(result); break;
                 }
+                case OP_SPAWN: {
+                    int32_t target_offset; std::memcpy(&target_offset, ip, 4); ip += 4;
+                    uint8_t arg_count = *ip++;
+                    if (vm_stack.size() < arg_count) throw std::runtime_error("Stack underflow during SPAWN.");
+                    spawn_args.resize(arg_count);
+                    for (int i = arg_count - 1; i >= 0; --i) {
+                        spawn_args[i] = vm_stack.back(); vm_stack.pop_back();
+                    }
+                    spawn_pair = threads_alloc();
+                    spawn_pair.second->th = std::thread(thread_entry, &vm, target_offset,
+                                                        std::move(spawn_args), spawn_pair.second);
+                    vm_stack.push_back(Value(spawn_pair.first)); break;
+                }
                 case OP_POP: vm_stack.pop_back(); break;
                 case OP_PRINT: {
                     if (vm_stack.empty()) throw std::runtime_error("Stack underflow during PRINT.");
                     Value val = vm_stack.back(); vm_stack.pop_back();
-                    if (val.type == ValueType::STRING_CONST) {
-                        size_t idx = val.as.str_idx;
-                        if (idx < constants.size()) std::cout << constants[idx] << std::endl;
-                        else std::cout << "<Invalid String Index>" << std::endl;
-                    } else {
-                        std::cout << val << std::endl;
-                    }
+                    print_value(val, constants);
                     break;
                 }
                 default:
@@ -777,7 +854,13 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
         }
 #endif
     } catch (const std::runtime_error& e) {
-        std::cerr << "AVM Runtime Error: " << e.what() << std::endl;
+        if (is_main) {
+            std::cerr << "AVM Runtime Error: " << e.what() << std::endl;
+            return 1;
+        }
+        // Worker thread: record for join() to re-raise instead of printing here.
+        out_result = Value();
+        out_error = e.what();
         return 1;
     }
     return 0;

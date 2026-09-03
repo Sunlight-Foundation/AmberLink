@@ -51,6 +51,7 @@ pub enum OpCode {
     Call = 0x30,
     Return = 0x31,
     CallNative = 0x32,
+    Spawn = 0x33,
 
     // --- Utilities ---
     Pop = 0x80,

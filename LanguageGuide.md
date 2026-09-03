@@ -297,3 +297,29 @@ avm app.ama
 print hasResource("welcome")   // true
 print readResource("welcome")  // file contents
 ```
+
+## 11. Threads (`spawn`/`join`)
+
+OS threads under a global interpreter lock: one thread executes at a time, and
+threads run concurrently through blocking calls (`sleep`, `input`, HTTP, FFI).
+`spawn` evaluates its arguments now and runs the function on a new thread,
+returning a handle; `join` blocks until it finishes and yields its return value.
+Workers share globals and the heap; use `join` ordering to keep results
+deterministic. A worker's runtime error surfaces when joined. The program waits
+for all threads before exiting.
+
+```java
+int fib(int n) {
+    if n < 2 { return n }
+    return fib(n - 1) + fib(n - 2)
+}
+
+var h1 = spawn fib(20)
+var h2 = spawn fib(22)
+print join(h1)   // 6765
+print join(h2)   // 17711
+```
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `join` | `value join(int handle)` | Waits for the thread; yields its return value. |

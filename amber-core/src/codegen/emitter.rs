@@ -333,6 +333,24 @@ impl Emitter {
                 self.emit_int(0);
                 self.emit_byte(args.len() as u8);
             }
+            Expr::Spawn(name, args) => {
+                // spawn lowers exactly like Call (patched address + argc) but the
+                // VM starts a new thread at the address instead of jumping to it.
+                if symbols.natives.contains_key(name) {
+                    errors.push(CompileError::new(0, 0, format!("Cannot spawn native function '{}'.", name)));
+                    self.emit_error_fallback();
+                    return;
+                }
+
+                for arg in args {
+                    self.emit_expr(arg, symbols, errors);
+                }
+                self.emit_byte(OpCode::Spawn.into());
+
+                self.calls_to_patch.push((self.code.len(), name.clone()));
+                self.emit_int(0);
+                self.emit_byte(args.len() as u8);
+            }
             Expr::Binary(left, op, right) => {
                 // Type check: both operands should be compatible.
                 let lt = symbols.infer_type(left);

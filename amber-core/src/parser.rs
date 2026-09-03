@@ -288,6 +288,28 @@ impl Parser {
                 }
             }
             Token::StringLit(s) => Expr::StringLiteral(s),
+            Token::Spawn => {
+                let name = match self.advance() {
+                    Token::Identifier(n) => n,
+                    _ => return self.error_expr("Expected function name after 'spawn'"),
+                };
+                if self.peek() != Token::LParen {
+                    return self.error_expr("Expected '(' after spawn function name");
+                }
+                self.advance();
+                let mut args = Vec::new();
+                if self.peek() != Token::RParen {
+                    loop {
+                        args.push(self.parse_expr());
+                        if self.peek() == Token::Comma { self.advance(); } else { break; }
+                    }
+                }
+                if self.peek() != Token::RParen {
+                    return self.error_expr("Expected ')' after spawn arguments");
+                }
+                self.advance();
+                Expr::Spawn(name, args)
+            }
             Token::Identifier(name) => {
                 if self.peek() == Token::LParen {
                     self.advance();

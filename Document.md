@@ -126,7 +126,7 @@ The bytecode backend is its first consumer.
 - **Design rule for new opcodes:** any new opcode must add its operand layout to `ir.rs`
   (`decode` + `encode` + `format_instr`), or `--emit-ir` rejects the program.
 
-## 5. Concurrency Design (proposed, not yet implemented)
+## 5. Concurrency Design (implemented as specified, with notes below)
 
 **Decision: OS threads + a global interpreter lock (GIL).** One thread executes
 bytecode at a time; threads run concurrently through blocking operations. This gives
@@ -214,3 +214,14 @@ the new opcode; old VMs reject new programs with the existing unknown-opcode err
 2. Cap on live threads; behavior when exceeded (error vs block).
 3. Unhandled error with no joiner: process abort vs silent record.
 4. Whether `print` from multiple threads needs an output lock (yes, almost surely).
+
+### Implementation notes (decisions taken while building)
+
+1. Grammar is bare `spawn f(x)` (new `spawn` keyword; `join` is native ID 44).
+2. No thread cap in v1; the OS is the limit.
+3. Errors are recorded on the handle; `join` re-raises, re-join returns the
+   cached outcome, and unjoined threads are joined at program end (never silently
+   dropped — plus every thread object must be joined before its slot dies).
+4. `print`/`printStr` share one output mutex.
+5. One real bug class found in testing: a finished-but-unjoined thread is still
+   joinable, so the fast path must reap it too — or process exit aborts.

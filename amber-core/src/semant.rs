@@ -128,6 +128,8 @@ impl SymbolTable {
         register("freeLib", 41, Type::Bool, vec![Type::Int]);
         register("callInt", 42, Type::Int, vec![Type::Int, Type::String, Type::Int, Type::Int]);
         register("callStr", 43, Type::Int, vec![Type::Int, Type::String, Type::String]);
+        // Threads: join(handle) blocks and yields the worker's return value.
+        register("join", 44, Type::Unknown, vec![Type::Int]);
     }
 
     pub fn get_var_type(&self, name: &str) -> Option<Type> {
@@ -215,6 +217,8 @@ impl SymbolTable {
                     self.natives.get(name).map(|n| n.return_type.clone())
                 }
             }
+            // spawn yields a thread-handle int; join() returns the worker's value.
+            Expr::Spawn(_, _) => Some(Type::Int),
             Expr::Error => Some(Type::Unknown),
         }
     }

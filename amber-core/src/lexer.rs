@@ -9,6 +9,7 @@ pub enum Token {
     Public, Private, Protected,
     Static, Extends, Interface, Implements,
     Import,
+    Spawn,
     True, False,
     Identifier(String),
     Number(i64),
@@ -164,6 +165,7 @@ impl Lexer {
             "interface" => Token::Interface,
             "implements" => Token::Implements,
             "import" => Token::Import,
+            "spawn" => Token::Spawn,
             _ => Token::Identifier(text),
         };
         self.push(tokens, token);
