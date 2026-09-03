@@ -44,7 +44,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 
 - [~] **Standard Library** — native string manipulation, math, file I/O, time, and process functions shipped (`stdlib/core.amb`, `stdlib/io.amb`); `HashMap`, `LinkedList`, and networking still pending
 - [x] **Module system** — `import` statements, multi-file projects
-- [ ] **Amberlink Archive (`.ama`)** — packaged bytecode + resources, like Java JARs
+- [x] **Amberlink Archive (`.ama`)** — packaged bytecode + resources, like Java JARs
 - [ ] **CLI (`make`)** — improved error handling, project scaffolding, watch mode
 - [~] **Compiler improvements** — descriptive error messages with `line:col` and error recovery in the parser/emitter (`error.rs`, `synchronize()`), static type checking in `semant.rs`; backend IR design still pending
 - [ ] **Language Server (LSP)** — autocompletion and error highlighting for VS Code / IntelliJ

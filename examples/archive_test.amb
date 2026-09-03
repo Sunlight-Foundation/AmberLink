@@ -1,0 +1,18 @@
+// archive_test.amb
+// Exercises the Amberlink Archive (.ama): bundled resources read at runtime.
+// Compile with:
+//   ambc examples/archive_test.amb --archive out/test.ama --resource welcome=examples/resources/welcome.txt
+// Then run with:
+//   avm out/test.ama
+
+print "has welcome resource: "
+print hasResource("welcome")
+
+print "read welcome resource: "
+print readResource("welcome")
+
+print "missing resource returns empty: "
+print readResource("nope")
+
+print "resource names: "
+print resourceNames()
