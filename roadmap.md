@@ -76,6 +76,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 - [ ] **Generics** — type parameters (`List<T>`, `Map<K, V>`)
 - [ ] **Exception handling** — `try`, `catch`, `throw`
 - [ ] **Pattern matching** — `match` expressions
+- [ ] **Multi-module archives (Amberlink 2)** — separately-compiled modules with runtime linking/loading inside `.ama` (true multi-unit JARs); extends the single-unit archive
 
 ---
 
