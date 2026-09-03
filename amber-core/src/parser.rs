@@ -103,6 +103,7 @@ impl Parser {
             Token::LBrace => self.parse_block(symbols),
             Token::Class => self.parse_class_decl(symbols),
             Token::Interface => self.parse_interface_decl(),
+            Token::Import => self.parse_import(),
             Token::Return => self.parse_return(),
             Token::Print => self.parse_print(),
             Token::Identifier(_) => {
@@ -130,6 +131,28 @@ impl Parser {
                 Stmt::Expression(expr)
             }
         }
+    }
+
+    fn parse_import(&mut self) -> Stmt {
+        self.advance(); // consume `import`
+        let path = match self.peek() {
+            Token::StringLit(s) => {
+                let p = s.clone();
+                self.advance();
+                p
+            }
+            _ => {
+                self.errors.push(CompileError::new(
+                    self.tokens[self.pos.min(self.tokens.len() - 1)].line,
+                    self.tokens[self.pos.min(self.tokens.len() - 1)].column,
+                    "Expected a quoted path after `import`, e.g. import \"util.amb\"",
+                ));
+                self.consume_semicolon();
+                return Stmt::Error;
+            }
+        };
+        self.consume_semicolon();
+        Stmt::Import(path)
     }
 
     fn parse_type(&mut self) -> Type {

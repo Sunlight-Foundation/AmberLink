@@ -68,6 +68,8 @@ pub enum Stmt {
     Class(String, Option<String>, Vec<(String, Type, Visibility, bool)>, Vec<Stmt>, Vec<String>), // Name, Parent, Fields(name,type,vis,is_static), Methods, Implements
     FieldSet(Box<Expr>, String, Expr), // Object, Field Name, Value
     Interface(String, Vec<(String, Type, Vec<(String, Type)>)>), // Name, Method signatures (name, return_type, params)
+    // Import a module file. Path is resolved by the compiler.
+    Import(String),
     // List Operations
     ListAdd(Box<Expr>, Expr), // List Expr, Value
     ListSet(Box<Expr>, Box<Expr>, Expr), // List Expr, Index, Value
