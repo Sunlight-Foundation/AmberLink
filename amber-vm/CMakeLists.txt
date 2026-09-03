@@ -15,3 +15,8 @@ add_executable(avm
     src/resources.cpp
     src/roots.cpp
 )
+
+# Sockets for the HTTP natives
+if(WIN32)
+    target_link_libraries(avm ws2_32)
+endif()

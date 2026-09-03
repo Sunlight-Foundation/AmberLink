@@ -179,6 +179,14 @@ Amberlink ships a set of built-in **native functions** implemented directly by t
 | `exit` | `void exit(int status)` | Terminates the program with the given status. |
 | `sleep` | `void sleep(int ms)` | Pauses execution for `ms` milliseconds. |
 
+### Networking
+Minimal HTTP/1.0 client (`http://` only, no TLS). Fail-soft: `""` on any failure, like `readFile`.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `httpGet` | `String httpGet(String url)` | Response body, or `""` on failure. |
+| `httpPost` | `String httpPost(String url, String body)` | POSTs `body`, returns response body or `""`. |
+
 ### Collections (HashMap, LinkedList)
 Dynamic collections backed by VM heap objects. Keys and values can be any built-in value.
 
