@@ -32,13 +32,14 @@ if [ -n "${PY:-}" ]; then
 fi
 
 for e in $EXAMPLES; do
-  if ! "$AMBC" "examples/$e.amb" >/dev/null 2>&1; then echo "$e : COMPILE FAIL"; fail=$((fail+1)); continue; fi
+  # --emit-ir also asserts the backend-IR decode/re-encode round-trip.
+  if ! "$AMBC" "examples/$e.amb" --emit-ir >/dev/null 2>&1; then echo "$e : COMPILE FAIL"; fail=$((fail+1)); continue; fi
   if [ "$e" = "net_test" ] && [ -z "$server" ]; then echo "$e : compile OK (run skipped, no python)"; continue; fi
   if ! "$AVM" "examples/$e.amc" >/dev/null 2>&1; then echo "$e : RUN FAIL"; fail=$((fail+1)); else echo "$e : OK"; fi
 done
 
 for s in $STDLIB; do
-  if ! "$AMBC" "$s" >/dev/null 2>&1; then echo "$s : COMPILE FAIL"; fail=$((fail+1)); else echo "$s : OK"; fi
+  if ! "$AMBC" "$s" --emit-ir >/dev/null 2>&1; then echo "$s : COMPILE FAIL"; fail=$((fail+1)); else echo "$s : OK"; fi
 done
 
 if [ -n "$server" ]; then kill "$server" 2>/dev/null; fi

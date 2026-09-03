@@ -39,14 +39,14 @@ Development is split into phases, each building toward a robust, modern, high-pe
 
 ---
 
-## Phase 4 — Ecosystem & Tooling (v0.7)
+## Phase 4 — Ecosystem & Tooling (v0.7) ✅
 *The "Mature" milestone — productive developer experience.*
 
 - [x] **Standard Library** — native string manipulation, math, file I/O, time, process, `HashMap`/`LinkedList`, resource, and networking functions shipped (`stdlib/core.amb`, `stdlib/io.amb`, `stdlib/collections.amb`, `stdlib/net.amb`)
 - [x] **Module system** — `import` statements, multi-file projects
 - [x] **Amberlink Archive (`.ama`)** — packaged bytecode + resources, like Java JARs
 - [x] **CLI (`make`)** — `new`/`test`/`watch` targets, arg validation with usage errors, `.ama`-aware `run`
-- [~] **Compiler improvements** — descriptive error messages with `line:col` and error recovery in the parser/emitter (`error.rs`, `synchronize()`), static type checking in `semant.rs`; backend IR design still pending
+- [x] **Compiler improvements** — descriptive error messages with `line:col` and error recovery in the parser/emitter (`error.rs`, `synchronize()`), static type checking in `semant.rs`, backend IR data model with `ambc --emit-ir` dump and decode/re-encode round-trip (`codegen/ir.rs`)
 
 ---
 
