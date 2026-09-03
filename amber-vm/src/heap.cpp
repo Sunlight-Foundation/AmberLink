@@ -10,6 +10,7 @@ Heap::~Heap() {
 }
 
 int32_t Heap::register_object(AmberObject* obj) {
+    ++allocated_since_gc;
     if (!free_slots.empty()) {
         size_t idx = free_slots.back();
         free_slots.pop_back();
@@ -82,6 +83,10 @@ void Heap::mark(AmberObject* obj, size_t constant_pool_size) {
 }
 
 void Heap::collect(const std::vector<Value>& stack, const std::vector<Value>& globals, size_t constant_pool_size) {
+    // Cheap gate: skip the full mark-and-sweep until enough garbage may exist.
+    if (allocated_since_gc < gc_threshold) return;
+    allocated_since_gc = 0;
+
     // 1. Unmark all objects (Reset)
     for (AmberObject* obj : objects) {
         if (obj) obj->marked = false;
@@ -112,6 +117,7 @@ void Heap::collect(const std::vector<Value>& stack, const std::vector<Value>& gl
 }
 
 void Heap::sweep() {
+    live_objects = 0;
     for (size_t i = 0; i < objects.size(); ++i) {
         AmberObject* obj = objects[i];
         if (obj) {
@@ -119,7 +125,12 @@ void Heap::sweep() {
                 delete obj;
                 objects[i] = nullptr;
                 free_slots.push_back(i);
+            } else {
+                ++live_objects;
             }
         }
     }
+    // Adapt: next collection only after the heap could have doubled.
+    size_t next = live_objects * 2;
+    gc_threshold = next < 1024 ? 1024 : next;
 }

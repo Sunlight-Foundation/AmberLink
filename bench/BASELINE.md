@@ -11,6 +11,8 @@ Machine: Windows x64, mingw64 build. Lower is better (seconds).
 | map.amb (indexed) | 100k mapPut + 100k mapGet | 100000 | 0.233 |
 | methods.amb | 2M method calls | 2000000 | 1.467 |
 | strcat.amb | 20k string concats | 20000 | 0.073 |
+| gc.amb | 20k live Points + 20k concats | 20000 | 15.964 |
+| gc.amb (threshold) | 20k live Points + 20k concats | 20000 | 0.075 |
 
 Notes:
 - Integer results are i32; benches print loop counters, not sums, to avoid overflow.
