@@ -50,6 +50,13 @@ Or run pre-compiled bytecode directly:
 .\bin\avm.exe output.amc    # Windows
 ```
 
+Scaffold a new project, run the regression suite, or rebuild on every change:
+```bash
+make new name=myproject
+make test
+make watch file=main.amb
+```
+
 ---
 
 ## Roadmap
