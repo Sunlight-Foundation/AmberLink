@@ -16,8 +16,8 @@ run_file() {
 }
 
 echo "[watch] watching *.amb under $PWD (Ctrl+C to stop)"
+last=$(find . -name '*.amb' -type f | sort | xargs cksum 2>/dev/null)
 run_file
-last=""
 while true; do
   sleep 2
   cur=$(find . -name '*.amb' -type f | sort | xargs cksum 2>/dev/null)
