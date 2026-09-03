@@ -52,6 +52,7 @@ enum OpCode : uint8_t {
     OP_CALL           = 0x30, // Call function at 4-byte address
     OP_RETURN         = 0x31, // Return from function
     OP_CALL_NATIVE    = 0x32, // Operand: Native ID (u16). Pop args, call C++ native, push result.
+    OP_SPAWN          = 0x33, // Start a thread at 4-byte address (argc u8). Pop args, push handle.
 
     // --- Utilities ---
     OP_POP            = 0x80, // Pop the top value from the stack and discard it

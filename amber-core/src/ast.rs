@@ -42,6 +42,7 @@ pub enum Expr {
     NewList, // New List
     ArrayAccess(String, Box<Expr>), // Name, Index
     Call(String, Vec<Expr>),
+    Spawn(String, Vec<Expr>), // Function name, Args -> thread handle (int)
     MethodCall(Box<Expr>, String, Vec<Expr>), // Object, Method Name, Args
     NewInstance(String, Vec<Expr>), // Class Name, Args
     GetField(Box<Expr>, String), // Object Expr, Field Name

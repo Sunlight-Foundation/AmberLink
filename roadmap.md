@@ -57,7 +57,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 - [x] **GC collect threshold** — `collect()` was a full mark-and-sweep on every string concat; now gated on allocations-since-GC with an adaptive 2x-live threshold
 - [x] **NaN-boxing** — evaluated: `Value` is already 8 bytes (tag + 4-byte payload), so packing gains nothing; not implemented
 - [x] **Inline caching** — evaluated: field/method dispatch is already monomorphic via compile-time resolution (measured zero delta, reverted); shipped hash-indexed maps instead
-- [ ] **Concurrency** — lightweight threads, `async`/`await`, or actor model
+- [x] **Concurrency** — OS threads + GIL (`spawn`/`join`), GIL release in blocking natives, shared heap and globals
 - [x] **FFI** — call C functions from Amberlink (`loadLib`/`callInt`/`callStr` for int and string marshaling); access system libraries
 
 ---

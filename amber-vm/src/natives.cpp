@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <cstring>
 #include "resources.hpp"
+#include "threads.hpp"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -67,7 +68,7 @@ static Value native_input(std::vector<Value>& args, std::vector<std::string>& co
     (void)heap;
     if (!args.empty()) throw std::runtime_error("input expects 0 arguments.");
     std::string line;
-    std::getline(std::cin, line);
+    { GilRelease gil_released; std::getline(std::cin, line); }
     return make_string_const(constants, line);
 }
 
@@ -133,6 +134,7 @@ static Value native_printStr(std::vector<Value>& args, std::vector<std::string>&
     if (args.size() != 1) throw std::runtime_error("printStr expects 1 argument.");
     const Value& v = args[0];
     if (v.type == ValueType::STRING_CONST) {
+        std::lock_guard<std::mutex> out_lock(g_out_mutex);
         std::cout << constants[v.as.str_idx];
     } else {
         throw std::runtime_error("printStr expects a String.");
@@ -184,7 +186,7 @@ static Value native_sleep(std::vector<Value>& args, std::vector<std::string>& co
     (void)heap;
     if (args.size() != 1) throw std::runtime_error("sleep expects 1 argument.");
     if (args[0].type != ValueType::INT) throw std::runtime_error("sleep expects an int (milliseconds).");
-    std::this_thread::sleep_for(std::chrono::milliseconds(args[0].as.i));
+    { GilRelease gil_released; std::this_thread::sleep_for(std::chrono::milliseconds(args[0].as.i)); }
     return Value();
 }
 
@@ -654,7 +656,10 @@ static Value native_httpGet(std::vector<Value>& args, std::vector<std::string>& 
     if (args.size() != 1) throw std::runtime_error("httpGet expects 1 argument.");
     if (args[0].type != ValueType::STRING_CONST) throw std::runtime_error("httpGet expects a String URL.");
     std::string out;
-    if (!http_fetch(constants[args[0].as.str_idx], "GET", "", out)) return make_string_const(constants, "");
+    bool ok;
+    std::string url = constants[args[0].as.str_idx];
+    { GilRelease gil_released; ok = http_fetch(url, "GET", "", out); }
+    if (!ok) return make_string_const(constants, "");
     return make_string_const(constants, out);
 }
 
@@ -666,7 +671,11 @@ static Value native_httpPost(std::vector<Value>& args, std::vector<std::string>&
     if (args[0].type != ValueType::STRING_CONST) throw std::runtime_error("httpPost expects a String URL.");
     if (args[1].type != ValueType::STRING_CONST) throw std::runtime_error("httpPost expects a String body.");
     std::string out;
-    if (!http_fetch(constants[args[0].as.str_idx], "POST", constants[args[1].as.str_idx], out)) return make_string_const(constants, "");
+    bool ok;
+    std::string url = constants[args[0].as.str_idx];
+    std::string body = constants[args[1].as.str_idx];
+    { GilRelease gil_released; ok = http_fetch(url, "POST", body, out); }
+    if (!ok) return make_string_const(constants, "");
     return make_string_const(constants, out);
 }
 
@@ -750,7 +759,9 @@ static Value native_callInt(std::vector<Value>& args, std::vector<std::string>& 
     if (!sym) throw std::runtime_error("callInt: symbol not found: " + name);
     typedef int (*Fn2)(int, int);
     Fn2 fn = reinterpret_cast<Fn2>(sym);
-    return Value((int32_t)fn(args[2].as.i, args[3].as.i));
+    int r;
+    { GilRelease gil_released; r = fn(args[2].as.i, args[3].as.i); }
+    return Value((int32_t)r);
 }
 
 // --- callStr(handle, symbol, s) : int ---
@@ -767,7 +778,44 @@ static Value native_callStr(std::vector<Value>& args, std::vector<std::string>& 
     if (!sym) throw std::runtime_error("callStr: symbol not found: " + name);
     typedef int (*FnS)(const char*);
     FnS fn = reinterpret_cast<FnS>(sym);
-    return Value((int32_t)fn(constants[args[2].as.str_idx].c_str()));
+    int r;
+    std::string arg = constants[args[2].as.str_idx];
+    { GilRelease gil_released; r = fn(arg.c_str()); }
+    return Value((int32_t)r);
+}
+
+// --- join(handle) : value ---
+// Blocks until the thread finishes and yields its return value. Re-raises a
+// worker's runtime error in the joining thread. Re-joining returns the same
+// outcome; concurrent double-join of one handle is a runtime error.
+static Value native_join(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants; (void)heap;
+    if (args.size() != 1) throw std::runtime_error("join expects 1 argument.");
+    if (args[0].type != ValueType::INT) throw std::runtime_error("join expects an int handle.");
+    auto slot = threads_get(args[0].as.i);
+    if (!slot) throw std::runtime_error("join: bad thread handle.");
+    {
+        std::lock_guard<std::mutex> lk(slot->m);
+        if (slot->finished) {
+            slot->joined = true;
+            // A finished thread is still joinable until reaped; join here
+            // (returns immediately) so no joinable thread outlives the slot.
+            if (slot->th.joinable()) slot->th.join();
+            if (!slot->error.empty()) throw std::runtime_error(slot->error);
+            return slot->result;
+        }
+        if (slot->join_started) throw std::runtime_error("join: thread is already being joined.");
+        slot->join_started = true;
+    }
+    // Drop the GIL while blocked so the worker (and others) can run.
+    // The slot is heap-allocated and reference-counted, so it cannot move.
+    { GilRelease gil_released; slot->th.join(); }
+    {
+        std::lock_guard<std::mutex> lk(slot->m);
+        slot->joined = true;
+        if (!slot->error.empty()) throw std::runtime_error(slot->error);
+        return slot->result;
+    }
 }
 
 std::vector<NativeEntry>& registry() {
@@ -816,6 +864,7 @@ std::vector<NativeEntry>& registry() {
         {native_freeLib, 1},
         {native_callInt, 4},
         {native_callStr, 3},
+        {native_join, 1},
     };
     return reg;
 }

@@ -43,6 +43,7 @@ pub enum IrInstr {
     LessEqual,
     GreaterEqual,
     Call { addr: i32, argc: u8 },
+    Spawn { addr: i32, argc: u8 },
     Return,
     CallNative(u16),
     NewInstance { name_idx: i32, field_count: i32 },
@@ -147,6 +148,15 @@ pub fn decode(code: &[u8]) -> Result<IrProgram, String> {
                 pos += 1;
                 IrInstr::Call { addr, argc }
             }
+            x if x == OpCode::Spawn as u8 => {
+                let addr = read_i32(code, &mut pos)?;
+                if pos >= code.len() {
+                    return Err(format!("truncated u8 operand at offset {}", pos));
+                }
+                let argc = code[pos];
+                pos += 1;
+                IrInstr::Spawn { addr, argc }
+            }
             x if x == OpCode::Return as u8 => IrInstr::Return,
             x if x == OpCode::CallNative as u8 => IrInstr::CallNative(read_u16(code, &mut pos)?),
             x if x == OpCode::NewInstance as u8 => {
@@ -212,6 +222,7 @@ pub fn encode(prog: &IrProgram) -> Vec<u8> {
             IrInstr::LessEqual => out.push(OpCode::LessEqual.into()),
             IrInstr::GreaterEqual => out.push(OpCode::GreaterEqual.into()),
             IrInstr::Call { addr, argc } => { out.push(OpCode::Call.into()); push_i32(&mut out, *addr); out.push(*argc); }
+            IrInstr::Spawn { addr, argc } => { out.push(OpCode::Spawn.into()); push_i32(&mut out, *addr); out.push(*argc); }
             IrInstr::Return => out.push(OpCode::Return.into()),
             IrInstr::CallNative(id) => { out.push(OpCode::CallNative.into()); out.extend_from_slice(&id.to_le_bytes()); }
             IrInstr::NewInstance { name_idx, field_count } => {
@@ -265,6 +276,7 @@ pub fn format_instr(instr: &IrInstr, constants: &[String]) -> String {
         IrInstr::LessEqual => "less_equal".into(),
         IrInstr::GreaterEqual => "greater_equal".into(),
         IrInstr::Call { addr, argc } => format!("call @{} argc={}", addr, argc),
+        IrInstr::Spawn { addr, argc } => format!("spawn @{} argc={}", addr, argc),
         IrInstr::Return => "return".into(),
         IrInstr::CallNative(id) => format!("call_native {}", id),
         IrInstr::NewInstance { name_idx, field_count } => match constants.get(*name_idx as usize) {

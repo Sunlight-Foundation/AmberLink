@@ -14,7 +14,7 @@ if (-not (Test-Path -LiteralPath $ambc) -or -not (Test-Path -LiteralPath $avm)) 
     exit 1
 }
 
-$examples = @('factorial','hello','hi','basic_types_test','float_test','list_test','test_init','test_methods','test_oop','test_overload','test_static','test_visibility','gc_test','native_test','file_io_test','collections_test','import_test','archive_test','net_test','ffi_test')
+$examples = @('factorial','hello','hi','basic_types_test','float_test','list_test','test_init','test_methods','test_oop','test_overload','test_static','test_visibility','gc_test','native_test','file_io_test','collections_test','import_test','archive_test','net_test','ffi_test','threads_test')
 $stdlib = @('stdlib\core.amb','stdlib\io.amb','stdlib\collections.amb','stdlib\net.amb','stdlib\ffi.amb')
 $fail = 0
 
