@@ -111,13 +111,51 @@ impl SymbolTable {
             Expr::Boolean(_) => Some(Type::Bool),
             Expr::StringLiteral(_) => Some(Type::String),
             Expr::NewList => Some(Type::List),
+            Expr::NewArray(_) => Some(Type::Unknown),
+            Expr::ArrayAccess(_, _) => Some(Type::Unknown),
+            Expr::NewInstance(class_name, _) => Some(Type::Class(class_name.clone())),
+            Expr::GetField(obj, field) => {
+                let ot = self.infer_type(obj)?;
+                if let Type::Class(cname) = ot {
+                    if let Some(ci) = self.classes.get(&cname) {
+                        if let Some((_, _, ft)) = ci.fields.get(field) {
+                            return Some(ft.clone());
+                        }
+                    }
+                }
+                Some(Type::Unknown)
+            }
+            Expr::MethodCall(obj, method, args) => {
+                let ot = self.infer_type(obj);
+                let cname = match ot {
+                    Some(Type::Class(c)) => c,
+                    _ => match self.find_class_with_method(method) {
+                        Some(ci) => ci.name.clone(),
+                        None => return Some(Type::Unknown),
+                    },
+                };
+                if let Some(ci) = self.classes.get(&cname) {
+                    for m in &ci.methods {
+                        if m.name == *method && m.param_types.len() == args.len() {
+                            if let Some(f) = self.functions.get(&m.mangled_name) {
+                                return Some(f.return_type.clone());
+                            }
+                        }
+                    }
+                }
+                Some(Type::Unknown)
+            }
             Expr::Variable(name) => self.get_var_type(name),
             Expr::Binary(left, op, right) => {
                 let lt = self.infer_type(left)?;
                 let rt = self.infer_type(right)?;
                 match op {
                     Op::Add | Op::Sub | Op::Mul | Op::Div => {
-                        if lt == rt { Some(lt) } else { None }
+                        if lt == rt || matches!(lt, Type::Unknown) || matches!(rt, Type::Unknown) {
+                            Some(lt)
+                        } else {
+                            None
+                        }
                     }
                     Op::LessThan | Op::GreaterThan | Op::Equals | Op::NotEquals
                     | Op::LessEquals | Op::GreaterEquals => Some(Type::Bool),
@@ -125,7 +163,7 @@ impl SymbolTable {
             }
             Expr::ListGet(list_expr, _) => {
                 let _ = self.infer_type(list_expr)?;
-                Some(Type::List) // TODO: track inner type
+                Some(Type::Unknown) // no element-type tracking yet
             }
             Expr::ListSize(_) => Some(Type::Int),
             Expr::Call(name, _) => {
@@ -135,7 +173,29 @@ impl SymbolTable {
                     self.natives.get(name).map(|n| n.return_type.clone())
                 }
             }
-            _ => None,
+            Expr::Error => Some(Type::Unknown),
+        }
+    }
+
+    // Finds the first class containing a method with the given name (searching
+    // parent chains), used when we cannot resolve a MethodCall receiver's type.
+    fn find_class_with_method(&self, method: &str) -> Option<&ClassInfo> {
+        for ci in self.classes.values() {
+            if self.class_or_parent_has_method(ci, method) {
+                return Some(ci);
+            }
+        }
+        None
+    }
+
+    fn class_or_parent_has_method(&self, ci: &ClassInfo, method: &str) -> bool {
+        if ci.methods.iter().any(|m| m.name == *method) { return true; }
+        match &ci.parent {
+            Some(parent) => match self.classes.get(parent) {
+                Some(p) => self.class_or_parent_has_method(p, method),
+                None => false,
+            },
+            None => false,
         }
     }
 
@@ -143,7 +203,21 @@ impl SymbolTable {
         if expected == actual { return true; }
         // Allow int -> float promotion
         if matches!(expected, Type::Float) && matches!(actual, Type::Int) { return true; }
-        // Class types are compatible if same name (no inheritance check yet)
+        // Unknown matches anything; the real check is deferred.
+        if matches!(expected, Type::Unknown) || matches!(actual, Type::Unknown) { return true; }
+        // Inheritance: a subclass instance satisfies a parent type.
+        if let (Type::Class(exp), Type::Class(act)) = (expected, actual) {
+            if self.is_subclass(act, exp) { return true; }
+        }
+        false
+    }
+
+    fn is_subclass(&self, child: &str, ancestor: &str) -> bool {
+        let mut cur = Some(child.to_string());
+        while let Some(c) = cur {
+            if &c == ancestor { return true; }
+            cur = self.classes.get(&c).and_then(|ci| ci.parent.clone());
+        }
         false
     }
 }

@@ -27,6 +27,7 @@ pub enum Type {
     Void,
     Class(String),
     List, // New Type
+    Unknown, // Unresolved type (error recovery / inference fallback)
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +49,8 @@ pub enum Expr {
     // List Operations
     ListGet(Box<Expr>, Box<Expr>), // List Expr, Index
     ListSize(Box<Expr>), // List Expr
+    // Sentinel for a parse error; lets parsing continue past a bad expression.
+    Error,
 }
 
 #[derive(Debug, Clone)]
@@ -68,4 +71,6 @@ pub enum Stmt {
     // List Operations
     ListAdd(Box<Expr>, Expr), // List Expr, Value
     ListSet(Box<Expr>, Box<Expr>, Expr), // List Expr, Index, Value
+    // Sentinel for a parse error; lets parsing continue past a bad statement.
+    Error,
 }
