@@ -109,3 +109,19 @@ Amberlink uses `make` as a unified interface for building the toolchain and comp
    ```bash
    make run file=main.amb
    ```
+
+## 4. Backend IR
+
+The compiler lowers AST to bytes in one step today. The backend IR (`amber-core/src/codegen/ir.rs`)
+models that same program as structured data — one `IrInstr` per operation with decoded
+operands — and is the interface future backends (LLVM, AOT) consume instead of raw bytes.
+The bytecode backend is its first consumer.
+
+- **Coverage:** every opcode the emitter produces (`bytecode.rs`), with constant-pool-aware
+  pretty-printing (`LoadConst` shows the pooled string, `NewInstance` the class name).
+- **Jumps resolved:** targets print as absolute byte offsets (`jump @42`); on the wire they stay
+  relative-to-operand-end as the VM executes them (`ip += 4; ip += offset` in `avm.cpp`).
+- **Round-trip guarantee:** `encode(decode(bytes)) == bytes`. `ambc --emit-ir` dumps the IR
+  listing and asserts the round-trip, so decoder drift fails the build loudly.
+- **Design rule for new opcodes:** any new opcode must add its operand layout to `ir.rs`
+  (`decode` + `encode` + `format_instr`), or `--emit-ir` rejects the program.

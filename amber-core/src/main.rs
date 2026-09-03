@@ -117,9 +117,10 @@ fn main() {
     let filename = &args[1];
 
     // Parse optional flags after the source file:
-    //   ambc <file.amb> [--archive out.ama] [--resource name=path]...
+    //   ambc <file.amb> [--archive out.ama] [--resource name=path]... [--emit-ir]
     let mut archive_out: Option<String> = None;
     let mut resources: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut emit_ir = false;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
@@ -152,6 +153,10 @@ fn main() {
                     }
                 }
                 i += 2;
+            }
+            "--emit-ir" => {
+                emit_ir = true;
+                i += 1;
             }
             other => {
                 eprintln!("Error: unexpected argument '{}'", other);
@@ -192,6 +197,24 @@ fn main() {
     let output_path = filename.replace(".amb", ".amc");
     emitter.write_file(&output_path).expect("Failed to write file");
     println!("Amberlink: Compiled {} ({} modules) to {}", filename, ordered_paths.len(), output_path);
+
+    // If requested, dump the backend IR and verify the decode/re-encode round-trip.
+    if emit_ir {
+        match codegen::ir::decode(&emitter.code) {
+            Ok(prog) => {
+                let back = codegen::ir::encode(&prog);
+                if back != emitter.code {
+                    eprintln!("Error: IR round-trip mismatch (decoder drift)");
+                    process::exit(1);
+                }
+                print!("{}", codegen::ir::format_program(&prog, &emitter.constants));
+            }
+            Err(e) => {
+                eprintln!("Error: could not decode IR: {}", e);
+                process::exit(1);
+            }
+        }
+    }
 
     // If requested, wrap the compiled program plus bundled resources in a .ama archive.
     if let Some(archive_path) = archive_out {

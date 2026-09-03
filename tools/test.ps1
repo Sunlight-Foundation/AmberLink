@@ -29,7 +29,8 @@ if ($python) {
 }
 
 foreach ($e in $examples) {
-    & ".\${ambc}" "examples\${e}.amb" 2>&1 | Out-Null
+    # --emit-ir also asserts the backend-IR decode/re-encode round-trip.
+    & ".\${ambc}" "examples\${e}.amb" --emit-ir 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Output "${e} : COMPILE FAIL"; $fail++; continue }
     if ($e -eq 'net_test' -and -not $server) { Write-Output "${e} : compile OK (run skipped, no python)"; continue }
     & ".\${avm}" "examples\${e}.amc" 2>&1 | Out-Null
@@ -37,7 +38,7 @@ foreach ($e in $examples) {
 }
 
 foreach ($s in $stdlib) {
-    & ".\${ambc}" $s 2>&1 | Out-Null
+    & ".\${ambc}" $s --emit-ir 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Output "${s} : COMPILE FAIL"; $fail++ } else { Write-Output "${s} : OK" }
 }
 
