@@ -78,7 +78,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 - [x] **Generics** — `Type::Generic(String, Vec<Type>)` parsed from `Class<T>` syntax; `types_compatible` handles generic-generic, raw↔generic (type erasure); emitter recognizes `Generic("List", _)` for List method dispatch; `List<int>` ≠ `List<String>` at compile time
 - [x] **Pattern matching** — `match` statement with literal patterns (`1`, `"hello"`, `true`) and wildcard (`_`); lowered to if/else chains, no VM changes
 - [x] **Exception handling** — `try { ... } catch e { ... }` and `throw <expr>`; new bytecode opcodes (`OP_TRY`/`OP_END_TRY`/`OP_THROW`); VM handler stack with stack unwinding on throw; handlers cleaned up on return
-- [ ] **LLVM AOT backend** — compile `.amb` to native machine code through LLVM IR (requires `llvm-sys` dependency; large undertaking)
+- [x] **LLVM AOT backend** — compile `.amb` to textual LLVM IR and native machine code through `clang`; `--emit-llvm` emits IR and `--native <path>` builds a native executable without an `llvm-sys` dependency. Verified with a release compiler build and a native `hello.amb` smoke test (build + execution passed). Broader feature-parity testing remains advisable.
 - [ ] **Multi-module archives** — separately-compiled modules with runtime linking/loading inside `.ama` (requires `.ama` format and VM loader changes)
 
 ---
