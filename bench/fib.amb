@@ -1,0 +1,12 @@
+// bench/fib.amb — recursive call overhead. Higher is worse.
+int fib(int n) {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+float t0 = clock()
+int r = fib(25)
+print r
+print clock() - t0

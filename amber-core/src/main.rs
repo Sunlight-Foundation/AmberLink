@@ -1,21 +1,22 @@
+mod ast;
+mod codegen;
+mod error;
 mod lexer;
+mod optimizer;
 mod parser;
 mod semant;
-mod codegen;
-mod ast;
-mod error;
-use error::{CompileError, ErrorList};
 use codegen::bytecode::OpCode;
+use error::{CompileError, ErrorList};
 
+use ast::Stmt;
+use codegen::emitter::Emitter;
+use lexer::Lexer;
+use parser::Parser;
+use semant::SymbolTable;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
-use lexer::Lexer;
-use parser::Parser;
-use semant::SymbolTable;
-use codegen::emitter::Emitter;
-use ast::Stmt;
 
 // Collects the top-level statements of a module and, transitively, the
 // statements of every module it imports. Imports are resolved depth-first, so
@@ -37,7 +38,9 @@ fn collect_module(
         Ok(src) => src,
         Err(e) => {
             errors.push(CompileError::new(
-                0, 0, format!("Could not read module '{}': {}", path.display(), e),
+                0,
+                0,
+                format!("Could not read module '{}': {}", path.display(), e),
             ));
             return;
         }
@@ -86,10 +89,11 @@ fn resolve_and_load(
     out: &mut Vec<Stmt>,
     errors: &mut ErrorList,
 ) {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    candidates.push(base_dir.join(import));
-    candidates.push(PathBuf::from("stdlib").join(import));
-    candidates.push(PathBuf::from(import));
+    let candidates: Vec<PathBuf> = vec![
+        base_dir.join(import),
+        PathBuf::from("stdlib").join(import),
+        PathBuf::from(import),
+    ];
 
     let mut found: Option<PathBuf> = None;
     for cand in candidates {
@@ -102,28 +106,157 @@ fn resolve_and_load(
     match found {
         Some(real) => collect_module(&real, symbols, ordered_paths, out, errors),
         None => errors.push(CompileError::new(
-            0, 0, format!("Could not resolve import '{}', searched relative and stdlib/.", import),
+            0,
+            0,
+            format!(
+                "Could not resolve import '{}', searched relative and stdlib/.",
+                import
+            ),
         )),
+    }
+}
+
+/// Compiles a single `.amb` file (plus its transitive imports) into `.amc`
+/// bytecode bytes. Returns the bytecode and the list of loaded module paths.
+fn compile_file(
+    path: &Path,
+    no_opt: bool,
+    emit_link_info: bool,
+) -> Result<(Vec<u8>, Vec<PathBuf>), ErrorList> {
+    let mut all_errors = ErrorList::new();
+    let mut symbols = SymbolTable::new();
+    symbols.init_native_registry();
+    let mut ordered_paths: Vec<PathBuf> = Vec::new();
+    let mut ast: Vec<Stmt> = Vec::new();
+    collect_module(
+        path,
+        &mut symbols,
+        &mut ordered_paths,
+        &mut ast,
+        &mut all_errors,
+    );
+
+    if all_errors.has_errors() {
+        return Err(all_errors);
+    }
+
+    // Local optimization pass over the merged AST (skipped with --no-opt).
+    let ast = if no_opt {
+        ast
+    } else {
+        optimizer::fold_program(ast)
+    };
+
+    // Emit the merged AST.
+    let mut emit_errors = ErrorList::new();
+    let mut emitter = Emitter::new();
+    emitter.emit_link_info = emit_link_info;
+    for stmt in ast {
+        emitter.emit_stmt(&stmt, &mut symbols, &mut emit_errors);
+    }
+    emitter.emit_byte(OpCode::Halt.into());
+    emitter.finalize(&symbols, &mut emit_errors); // Patch function calls
+
+    if emit_errors.has_errors() {
+        return Err(emit_errors);
+    }
+
+    Ok((emitter.to_bytes(), ordered_paths))
+}
+
+/// Runtime support linked into every native build (see runtime/amb_rt.c).
+const AMB_RUNTIME_C: &str = include_str!("../runtime/amb_rt.c");
+
+/// Lowers a compiled `.amc` image to LLVM IR text, exiting with diagnostics on failure.
+fn lower_to_llvm(amc: &[u8]) -> String {
+    let (consts, code) = match codegen::ir::split_amc(amc) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: could not read compiled image: {}", e);
+            process::exit(1);
+        }
+    };
+    let prog = match codegen::ir::decode(&code) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: could not decode IR for LLVM emission: {}", e);
+            process::exit(1);
+        }
+    };
+    match codegen::llvm_backend::emit_llvm(&prog, &consts) {
+        Ok(ll) => ll,
+        Err(errs) => {
+            for e in errs {
+                eprintln!("LLVM backend error: {}", e);
+            }
+            process::exit(1);
+        }
+    }
+}
+
+/// Builds a native executable from LLVM IR by invoking `clang` (must be on PATH).
+fn build_native(ll: &str, exe: &str) {
+    let dir = env::temp_dir().join(format!("amberlink-native-{}", process::id()));
+    fs::create_dir_all(&dir).expect("Failed to create temp dir");
+    let ll_path = dir.join("program.ll");
+    let rt_path = dir.join("amb_rt.c");
+    fs::write(&ll_path, ll).expect("Failed to write LLVM IR");
+    fs::write(&rt_path, AMB_RUNTIME_C).expect("Failed to write runtime");
+    let status = process::Command::new("clang")
+        .arg("-O2")
+        .arg("-Wno-override-module")
+        .arg(&ll_path)
+        .arg(&rt_path)
+        .arg("-o")
+        .arg(exe)
+        .status();
+    let _ = fs::remove_dir_all(&dir);
+    match status {
+        Ok(s) if s.success() => println!("Amberlink: Built native executable {}", exe),
+        Ok(s) => {
+            eprintln!("Error: clang exited with {}", s);
+            process::exit(1);
+        }
+        Err(e) => {
+            eprintln!(
+                "Error: could not run clang ({}). Install LLVM/clang and put it on PATH.",
+                e
+            );
+            process::exit(1);
+        }
     }
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: ambc <file.amb>");
+        eprintln!("Usage: ambc <file.amb> [--module mod.amb]... [--archive out.ama] [--resource name=path]... [--emit-ir] [--emit-llvm] [--native out] [--no-opt]");
         process::exit(1);
     }
 
     let filename = &args[1];
 
     // Parse optional flags after the source file:
-    //   ambc <file.amb> [--archive out.ama] [--resource name=path]... [--emit-ir]
+    //   ambc <file.amb> [--module mod.amb]... [--archive out.ama]
+    //       [--resource name=path]... [--emit-ir] [--emit-llvm] [--no-opt]
     let mut archive_out: Option<String> = None;
     let mut resources: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut extra_modules: Vec<String> = Vec::new();
     let mut emit_ir = false;
+    let mut emit_llvm = false;
+    let mut native_out: Option<String> = None;
+    let mut no_opt = false;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
+            "--module" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Error: --module requires a file path");
+                    process::exit(1);
+                }
+                extra_modules.push(args[i + 1].clone());
+                i += 2;
+            }
             "--archive" => {
                 if i + 1 >= args.len() {
                     eprintln!("Error: --archive requires an output path");
@@ -158,6 +291,22 @@ fn main() {
                 emit_ir = true;
                 i += 1;
             }
+            "--emit-llvm" => {
+                emit_llvm = true;
+                i += 1;
+            }
+            "--native" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Error: --native requires an output path");
+                    process::exit(1);
+                }
+                native_out = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--no-opt" => {
+                no_opt = true;
+                i += 1;
+            }
             other => {
                 eprintln!("Error: unexpected argument '{}'", other);
                 process::exit(1);
@@ -167,47 +316,68 @@ fn main() {
 
     let main_path = Path::new(filename);
 
-    // Parse and load the main module plus all transitive imports.
-    let mut all_errors = ErrorList::new();
-    let mut symbols = SymbolTable::new();
-    symbols.init_native_registry();
-    let mut ordered_paths: Vec<PathBuf> = Vec::new();
-    let mut ast: Vec<Stmt> = Vec::new();
-    collect_module(main_path, &mut symbols, &mut ordered_paths, &mut ast, &mut all_errors);
-
-    if all_errors.has_errors() {
-        eprint!("{}", all_errors);
-        process::exit(1);
-    }
-
-    // Emit the merged AST (dependencies first, then the main module).
-    let mut emit_errors = ErrorList::new();
-    let mut emitter = Emitter::new();
-    for stmt in ast {
-        emitter.emit_stmt(&stmt, &mut symbols, &mut emit_errors);
-    }
-    emitter.emit_byte(OpCode::Halt.into());
-    emitter.finalize(&symbols, &mut emit_errors); // Patch function calls
-
-    if emit_errors.has_errors() {
-        eprint!("{}", emit_errors);
-        process::exit(1);
-    }
+    // Compile the main module.
+    let (main_bytecode, main_modules) =
+        match compile_file(main_path, no_opt, !extra_modules.is_empty()) {
+            Ok(result) => result,
+            Err(errs) => {
+                eprint!("{}", errs);
+                process::exit(1);
+            }
+        };
 
     let output_path = filename.replace(".amb", ".amc");
-    emitter.write_file(&output_path).expect("Failed to write file");
-    println!("Amberlink: Compiled {} ({} modules) to {}", filename, ordered_paths.len(), output_path);
+    fs::write(&output_path, &main_bytecode).expect("Failed to write file");
+    println!(
+        "Amberlink: Compiled {} ({} modules) to {}",
+        filename,
+        main_modules.len(),
+        output_path
+    );
+
+    // Compile extra --module files into separate .amc entries.
+    let mut module_entries: Vec<(String, Vec<u8>)> =
+        vec![(codegen::archive::MAIN_ENTRY.to_string(), main_bytecode)];
+    for mod_path_str in &extra_modules {
+        let mod_path = Path::new(mod_path_str);
+        let (mod_bytecode, _) = match compile_file(mod_path, no_opt, true) {
+            Ok(result) => result,
+            Err(errs) => {
+                eprint!("{}", errs);
+                process::exit(1);
+            }
+        };
+        let entry_name = mod_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("module")
+            .to_string()
+            .replace(".amb", ".amc");
+        let entry_len = mod_bytecode.len();
+        module_entries.push((entry_name, mod_bytecode));
+        println!(
+            "Amberlink: Compiled module {} ({} bytes) for archive",
+            mod_path_str, entry_len
+        );
+    }
 
     // If requested, dump the backend IR and verify the decode/re-encode round-trip.
     if emit_ir {
-        match codegen::ir::decode(&emitter.code) {
+        let (consts, code) = match codegen::ir::split_amc(&module_entries[0].1) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Error: could not read compiled image: {}", e);
+                process::exit(1);
+            }
+        };
+        match codegen::ir::decode(&code) {
             Ok(prog) => {
                 let back = codegen::ir::encode(&prog);
-                if back != emitter.code {
+                if back != code {
                     eprintln!("Error: IR round-trip mismatch (decoder drift)");
                     process::exit(1);
                 }
-                print!("{}", codegen::ir::format_program(&prog, &emitter.constants));
+                print!("{}", codegen::ir::format_program(&prog, &consts));
             }
             Err(e) => {
                 eprintln!("Error: could not decode IR: {}", e);
@@ -216,12 +386,26 @@ fn main() {
         }
     }
 
-    // If requested, wrap the compiled program plus bundled resources in a .ama archive.
+    // If requested, emit LLVM IR for the compiled program (textual IR; no LLVM install needed).
+    if emit_llvm || native_out.is_some() {
+        let ll = lower_to_llvm(&module_entries[0].1);
+        if emit_llvm {
+            print!("{}", ll);
+        }
+        if let Some(exe) = &native_out {
+            build_native(&ll, exe);
+        }
+    }
+
+    // If requested, wrap the compiled modules plus bundled resources in a .ama archive.
     if let Some(archive_path) = archive_out {
+        let module_count = module_entries.len();
         let resource_count = resources.len();
-        let bytecode = emitter.to_bytes();
-        let ama = codegen::archive::build_archive(bytecode, resources);
-        fs::write(&archive_path, ama).expect("Failed to write archive");
-        println!("Amberlink: Wrote archive {} ({} resources)", archive_path, resource_count);
+        let ama = codegen::archive::build_archive(module_entries, resources);
+        fs::write(&archive_path, &ama).expect("Failed to write archive");
+        println!(
+            "Amberlink: Wrote archive {} ({} modules, {} resources)",
+            archive_path, module_count, resource_count
+        );
     }
 }

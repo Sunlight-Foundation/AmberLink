@@ -1,22 +1,43 @@
 // amber-core/src/codegen/emitter.rs
 use super::bytecode::OpCode;
-use crate::ast::{Expr, Op};
 use crate::ast::Stmt;
-use crate::error::{ErrorList, CompileError};
-use crate::semant::{SymbolTable, ClassInfo};
+use crate::ast::{Expr, Op, Pattern};
+use crate::error::{CompileError, ErrorList};
+use crate::semant::{ClassInfo, SymbolTable};
 use std::collections::HashMap;
 
 pub struct Emitter {
     pub code: Vec<u8>,
     pub constants: Vec<String>,
     pub calls_to_patch: Vec<(usize, String)>, // (Bytecode Index, Function Name)
+    pub try_patches: Vec<usize>,              // Bytecode Index of OP_TRY catch-addr placeholder
     pub current_class: Option<String>,
+    // Multi-module linking: calls to functions defined in other modules
+    // ((operand offset, function name)) and functions this module defines
+    // ((name, code address)). Serialized as the optional "AMLK" trailer.
+    pub imports: Vec<(usize, String)>,
+    pub exports: Vec<(String, u32)>,
+    // Only multi-module builds carry the trailer; plain programs stay byte-identical.
+    pub emit_link_info: bool,
 }
 
 impl Emitter {
-    pub fn new() -> Self { Self { code: Vec::new(), constants: Vec::new(), calls_to_patch: Vec::new(), current_class: None } }
+    pub fn new() -> Self {
+        Self {
+            code: Vec::new(),
+            constants: Vec::new(),
+            calls_to_patch: Vec::new(),
+            try_patches: Vec::new(),
+            current_class: None,
+            imports: Vec::new(),
+            exports: Vec::new(),
+            emit_link_info: false,
+        }
+    }
 
-    pub fn emit_byte(&mut self, b: u8) { self.code.push(b); }
+    pub fn emit_byte(&mut self, b: u8) {
+        self.code.push(b);
+    }
     pub fn emit_u16(&mut self, val: u16) {
         self.code.extend_from_slice(&val.to_le_bytes());
     }
@@ -66,6 +87,9 @@ impl Emitter {
             Expr::Error => {
                 self.emit_error_fallback();
             }
+            Expr::Null => {
+                self.emit_byte(OpCode::PushNull.into());
+            }
             Expr::NewArray(size) => {
                 self.emit_expr(size, symbols, errors);
                 self.emit_byte(OpCode::NewArray.into());
@@ -86,7 +110,11 @@ impl Emitter {
                 let class_info = match symbols.classes.get(class_name) {
                     Some(ci) => ci.clone(),
                     None => {
-                        errors.push(CompileError::new(0, 0, format!("Undefined class: {}", class_name)));
+                        errors.push(CompileError::new(
+                            0,
+                            0,
+                            format!("Undefined class: {}", class_name),
+                        ));
                         self.emit_error_fallback();
                         return;
                     }
@@ -111,14 +139,26 @@ impl Emitter {
             }
             Expr::GetField(obj_expr, field_name) => {
                 if let Expr::Variable(var_name) = &**obj_expr {
-                    if symbols.classes.contains_key(var_name) && !symbols.locals.contains_key(var_name) && !symbols.variables.contains_key(var_name) {
+                    if symbols.classes.contains_key(var_name)
+                        && !symbols.locals.contains_key(var_name)
+                        && !symbols.variables.contains_key(var_name)
+                    {
                         if let Some(class_info) = symbols.classes.get(var_name) {
-                            if let Some((global_idx, _ft)) = class_info.static_fields.get(field_name) {
+                            if let Some((global_idx, _ft)) =
+                                class_info.static_fields.get(field_name)
+                            {
                                 self.emit_byte(OpCode::LoadGlobal.into());
                                 self.emit_int(*global_idx as i32);
                                 return;
                             } else {
-                                errors.push(CompileError::new(0, 0, format!("Static field '{}' not found in class '{}'", field_name, var_name)));
+                                errors.push(CompileError::new(
+                                    0,
+                                    0,
+                                    format!(
+                                        "Static field '{}' not found in class '{}'",
+                                        field_name, var_name
+                                    ),
+                                ));
                                 self.emit_error_fallback();
                                 return;
                             }
@@ -128,6 +168,15 @@ impl Emitter {
 
                 self.emit_expr(obj_expr, symbols, errors); // Push object ref
 
+                // Null check: abort at runtime if the receiver is null.
+                let receiver_ty = symbols.infer_type(obj_expr);
+                if matches!(
+                    receiver_ty,
+                    Some(crate::ast::Type::Nullable(_)) | Some(crate::ast::Type::Unknown)
+                ) {
+                    self.emit_byte(OpCode::CheckNull.into());
+                }
+
                 // Find field index across all classes.
                 let mut field_idx = None;
 
@@ -136,8 +185,17 @@ impl Emitter {
 
                 for cls in classes {
                     if let Some((idx, vis, _ft)) = cls.fields.get(field_name) {
-                        if *vis == crate::ast::Visibility::Private && self.current_class.as_deref() != Some(cls.name.as_str()) {
-                            errors.push(CompileError::new(0, 0, format!("Cannot access private field '{}' of class '{}'", field_name, cls.name)));
+                        if *vis == crate::ast::Visibility::Private
+                            && self.current_class.as_deref() != Some(cls.name.as_str())
+                        {
+                            errors.push(CompileError::new(
+                                0,
+                                0,
+                                format!(
+                                    "Cannot access private field '{}' of class '{}'",
+                                    field_name, cls.name
+                                ),
+                            ));
                         }
                         field_idx = Some(*idx);
                         break;
@@ -146,7 +204,11 @@ impl Emitter {
                 let idx = match field_idx {
                     Some(idx) => idx,
                     None => {
-                        errors.push(CompileError::new(0, 0, format!("Field '{}' not found in any known class", field_name)));
+                        errors.push(CompileError::new(
+                            0,
+                            0,
+                            format!("Field '{}' not found in any known class", field_name),
+                        ));
                         self.emit_error_fallback();
                         return;
                     }
@@ -158,8 +220,14 @@ impl Emitter {
             Expr::MethodCall(obj, method_name, args) => {
                 // Intercept List built-in methods before class dispatch
                 let is_list_var = if let Expr::Variable(var_name) = &**obj {
-                    matches!(symbols.variable_types.get(var_name), Some(crate::ast::Type::List))
-                } else { false };
+                    match symbols.variable_types.get(var_name) {
+                        Some(crate::ast::Type::List) => true,
+                        Some(crate::ast::Type::Generic(name, _)) if name == "List" => true,
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
 
                 if is_list_var {
                     match method_name.as_str() {
@@ -193,13 +261,24 @@ impl Emitter {
 
                 let mut is_static_call = false;
                 if let Expr::Variable(var_name) = &**obj {
-                    if symbols.classes.contains_key(var_name) && !symbols.locals.contains_key(var_name) && !symbols.variables.contains_key(var_name) {
+                    if symbols.classes.contains_key(var_name)
+                        && !symbols.locals.contains_key(var_name)
+                        && !symbols.variables.contains_key(var_name)
+                    {
                         is_static_call = true;
                     }
                 }
 
                 if !is_static_call {
                     self.emit_expr(obj, symbols, errors); // 1. Push Object (this)
+                                                          // Null check: abort at runtime if the receiver is null.
+                    let receiver_ty = symbols.infer_type(obj);
+                    if matches!(
+                        receiver_ty,
+                        Some(crate::ast::Type::Nullable(_)) | Some(crate::ast::Type::Unknown)
+                    ) {
+                        self.emit_byte(OpCode::CheckNull.into());
+                    }
                 }
 
                 for arg in args {
@@ -232,14 +311,20 @@ impl Emitter {
                                 break;
                             }
                         }
-                        if found_class.is_some() { break; }
+                        if found_class.is_some() {
+                            break;
+                        }
                     }
                 }
 
                 let class_name = match found_class {
                     Some(c) => c,
                     None => {
-                        errors.push(CompileError::new(0, 0, format!("Method '{}' not found in any known class", method_name)));
+                        errors.push(CompileError::new(
+                            0,
+                            0,
+                            format!("Method '{}' not found in any known class", method_name),
+                        ));
                         self.emit_error_fallback();
                         return;
                     }
@@ -249,18 +334,37 @@ impl Emitter {
                 let class_info = match symbols.classes.get(&class_name) {
                     Some(ci) => ci,
                     None => {
-                        errors.push(CompileError::new(0, 0, format!("Class '{}' not found", class_name)));
+                        errors.push(CompileError::new(
+                            0,
+                            0,
+                            format!("Class '{}' not found", class_name),
+                        ));
                         self.emit_error_fallback();
                         return;
                     }
                 };
-                let matching: Vec<_> = class_info.methods.iter()
-                    .filter(|ms| ms.name == *method_name && ms.param_types.len() == args.len() && ms.is_static == is_static_call)
+                let matching: Vec<_> = class_info
+                    .methods
+                    .iter()
+                    .filter(|ms| {
+                        ms.name == *method_name
+                            && ms.param_types.len() == args.len()
+                            && ms.is_static == is_static_call
+                    })
                     .collect();
                 let method_sig = if matching.len() == 1 {
                     &matching[0]
                 } else if matching.is_empty() {
-                    errors.push(CompileError::new(0, 0, format!("No matching overload for method '{}' with {} args (static: {})", method_name, args.len(), is_static_call)));
+                    errors.push(CompileError::new(
+                        0,
+                        0,
+                        format!(
+                            "No matching overload for method '{}' with {} args (static: {})",
+                            method_name,
+                            args.len(),
+                            is_static_call
+                        ),
+                    ));
                     self.emit_error_fallback();
                     return;
                 } else {
@@ -268,8 +372,17 @@ impl Emitter {
                     &matching[0]
                 };
 
-                if method_sig.visibility == crate::ast::Visibility::Private && self.current_class.as_deref() != Some(class_name.as_str()) {
-                    errors.push(CompileError::new(0, 0, format!("Cannot access private method '{}' of class '{}'", method_name, class_name)));
+                if method_sig.visibility == crate::ast::Visibility::Private
+                    && self.current_class.as_deref() != Some(class_name.as_str())
+                {
+                    errors.push(CompileError::new(
+                        0,
+                        0,
+                        format!(
+                            "Cannot access private method '{}' of class '{}'",
+                            method_name, class_name
+                        ),
+                    ));
                 }
 
                 let full_name = method_sig.mangled_name.clone();
@@ -277,7 +390,8 @@ impl Emitter {
                 self.emit_byte(OpCode::Call.into());
                 self.calls_to_patch.push((self.code.len(), full_name));
                 self.emit_int(0);
-                self.emit_byte((args.len() + if is_static_call { 0 } else { 1 }) as u8); // +1 for 'this' if not static
+                self.emit_byte((args.len() + if is_static_call { 0 } else { 1 }) as u8);
+                // +1 for 'this' if not static
             }
             Expr::ArrayAccess(name, index) => {
                 if let Some(idx) = symbols.locals.get(name) {
@@ -287,7 +401,11 @@ impl Emitter {
                     self.emit_byte(OpCode::LoadGlobal.into());
                     self.emit_int(*idx as i32);
                 } else {
-                    errors.push(CompileError::new(0, 0, format!("Undefined variable: {}", name)));
+                    errors.push(CompileError::new(
+                        0,
+                        0,
+                        format!("Undefined variable: {}", name),
+                    ));
                     self.emit_error_fallback();
                     return;
                 }
@@ -302,7 +420,11 @@ impl Emitter {
                     self.emit_byte(OpCode::LoadGlobal.into());
                     self.emit_int(*index as i32);
                 } else {
-                    errors.push(CompileError::new(0, 0, format!("Undefined variable: {}", name)));
+                    errors.push(CompileError::new(
+                        0,
+                        0,
+                        format!("Undefined variable: {}", name),
+                    ));
                     self.emit_error_fallback();
                 }
             }
@@ -312,7 +434,16 @@ impl Emitter {
                     let native_id = native.id;
                     let arity = native.param_types.len();
                     if arity != args.len() {
-                        errors.push(CompileError::new(0, 0, format!("Native function '{}' expects {} arguments, got {}", name, arity, args.len())));
+                        errors.push(CompileError::new(
+                            0,
+                            0,
+                            format!(
+                                "Native function '{}' expects {} arguments, got {}",
+                                name,
+                                arity,
+                                args.len()
+                            ),
+                        ));
                         self.emit_error_fallback();
                         return;
                     }
@@ -333,13 +464,42 @@ impl Emitter {
                 self.emit_int(0);
                 self.emit_byte(args.len() as u8);
             }
+            Expr::Spawn(name, args) => {
+                // spawn lowers exactly like Call (patched address + argc) but the
+                // VM starts a new thread at the address instead of jumping to it.
+                if symbols.natives.contains_key(name) {
+                    errors.push(CompileError::new(
+                        0,
+                        0,
+                        format!("Cannot spawn native function '{}'.", name),
+                    ));
+                    self.emit_error_fallback();
+                    return;
+                }
+
+                for arg in args {
+                    self.emit_expr(arg, symbols, errors);
+                }
+                self.emit_byte(OpCode::Spawn.into());
+
+                self.calls_to_patch.push((self.code.len(), name.clone()));
+                self.emit_int(0);
+                self.emit_byte(args.len() as u8);
+            }
             Expr::Binary(left, op, right) => {
                 // Type check: both operands should be compatible.
                 let lt = symbols.infer_type(left);
                 let rt = symbols.infer_type(right);
                 if let (Some(ref l), Some(ref r)) = (&lt, &rt) {
                     if !symbols.types_compatible(l, r) {
-                        errors.push(CompileError::new(0, 0, format!("Type mismatch: cannot apply {:?} to {:?} and {:?}", op, l, r)));
+                        errors.push(CompileError::new(
+                            0,
+                            0,
+                            format!(
+                                "Type mismatch: cannot apply {:?} to {:?} and {:?}",
+                                op, l, r
+                            ),
+                        ));
                     }
                 }
                 self.emit_expr(left, symbols, errors);
@@ -373,9 +533,7 @@ impl Emitter {
     fn patch_jump(&mut self, offset_index: usize) {
         let jump_dist = (self.code.len() - offset_index - 4) as i32;
         let bytes = jump_dist.to_le_bytes();
-        for i in 0..4 {
-            self.code[offset_index + i] = bytes[i];
-        }
+        self.code[offset_index..offset_index + 4].copy_from_slice(&bytes);
     }
 
     fn add_constant(&mut self, s: String) -> usize {
@@ -388,19 +546,36 @@ impl Emitter {
     }
 
     pub fn finalize(&mut self, symbols: &SymbolTable, errors: &mut ErrorList) {
+        // Everything this module defines is exported for other modules to link against.
+        let mut exports: Vec<(String, u32)> = symbols
+            .functions
+            .iter()
+            .filter(|(n, _)| !symbols.externs.contains(*n))
+            .map(|(n, f)| (n.clone(), f.address))
+            .collect();
+        exports.sort();
+        self.exports = exports;
+
         for (index, name) in &self.calls_to_patch {
+            // Defined in another module: leave the operand for the loader to patch.
+            if symbols.externs.contains(name) {
+                self.imports.push((*index, name.clone()));
+                continue;
+            }
             let func_info = match symbols.functions.get(name) {
                 Some(f) => f,
                 None => {
-                    errors.push(CompileError::new(0, 0, format!("Undefined function: {}", name)));
+                    errors.push(CompileError::new(
+                        0,
+                        0,
+                        format!("Undefined function: {}", name),
+                    ));
                     continue;
                 }
             };
 
             let bytes = (func_info.address as i32).to_le_bytes();
-            for i in 0..4 {
-                self.code[index + i] = bytes[i];
-            }
+            self.code[*index..*index + 4].copy_from_slice(&bytes);
         }
     }
 
@@ -422,7 +597,9 @@ impl Emitter {
                 let actual_type = if let Some(t) = decl_type {
                     t.clone()
                 } else {
-                    symbols.infer_type(expr).unwrap_or(crate::ast::Type::Unknown)
+                    symbols
+                        .infer_type(expr)
+                        .unwrap_or(crate::ast::Type::Unknown)
                 };
                 symbols.variable_types.insert(name.clone(), actual_type);
 
@@ -442,7 +619,11 @@ impl Emitter {
                     self.emit_byte(OpCode::StoreGlobal.into());
                     self.emit_int(*index as i32);
                 } else {
-                    errors.push(CompileError::new(0, 0, format!("Undefined variable: {}", name)));
+                    errors.push(CompileError::new(
+                        0,
+                        0,
+                        format!("Undefined variable: {}", name),
+                    ));
                 }
             }
             Stmt::ArraySet(name, index, value) => {
@@ -453,7 +634,11 @@ impl Emitter {
                     self.emit_byte(OpCode::LoadGlobal.into());
                     self.emit_int(*idx as i32);
                 } else {
-                    errors.push(CompileError::new(0, 0, format!("Undefined variable: {}", name)));
+                    errors.push(CompileError::new(
+                        0,
+                        0,
+                        format!("Undefined variable: {}", name),
+                    ));
                     self.emit_error_fallback();
                 }
                 self.emit_expr(index, symbols, errors);
@@ -520,14 +705,22 @@ impl Emitter {
                 // Check if this is a void List operation (add/set) — these push nothing, skip POP.
                 let is_void_list_op = if let Expr::MethodCall(obj, method_name, args) = expr {
                     if let Expr::Variable(var_name) = &**obj {
-                        if matches!(symbols.variable_types.get(var_name), Some(crate::ast::Type::List)) {
-                            matches!(
-                                (method_name.as_str(), args.len()),
-                                ("add", 1) | ("set", 2)
-                            )
-                        } else { false }
-                    } else { false }
-                } else { false };
+                        let is_list = match symbols.variable_types.get(var_name) {
+                            Some(crate::ast::Type::List) => true,
+                            Some(crate::ast::Type::Generic(name, _)) if name == "List" => true,
+                            _ => false,
+                        };
+                        if is_list {
+                            matches!((method_name.as_str(), args.len()), ("add", 1) | ("set", 2))
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
 
                 self.emit_expr(expr, symbols, errors);
                 if !is_void_list_op {
@@ -551,7 +744,9 @@ impl Emitter {
                 symbols.next_local_index = 0;
 
                 for (param_name, _) in params {
-                    symbols.locals.insert(param_name.clone(), symbols.next_local_index);
+                    symbols
+                        .locals
+                        .insert(param_name.clone(), symbols.next_local_index);
                     symbols.next_local_index += 1;
                 }
 
@@ -576,13 +771,22 @@ impl Emitter {
                     if let Some(parent_info) = symbols.classes.get(parent_name).cloned() {
                         for (fname, (idx, vis, ft)) in &parent_info.fields {
                             field_map.insert(fname.clone(), (*idx, vis.clone(), ft.clone()));
-                            if *idx >= instance_idx { instance_idx = *idx + 1; }
+                            if *idx >= instance_idx {
+                                instance_idx = *idx + 1;
+                            }
                         }
                         for (fname, (idx, ft)) in &parent_info.static_fields {
                             static_field_map.insert(fname.clone(), (*idx, ft.clone()));
                         }
                     } else {
-                        errors.push(CompileError::new(0, 0, format!("Parent class '{}' not found for class '{}'", parent_name, name)));
+                        errors.push(CompileError::new(
+                            0,
+                            0,
+                            format!(
+                                "Parent class '{}' not found for class '{}'",
+                                parent_name, name
+                            ),
+                        ));
                     }
                 }
 
@@ -598,13 +802,17 @@ impl Emitter {
                 }
 
                 let mut method_sigs: Vec<crate::semant::MethodSignature> = Vec::new();
-                let mut static_method_names = Vec::new();
                 for m in methods {
                     if let Stmt::Function(fname, params, _, vis, is_static) = m {
                         let short_name = fname.strip_prefix(&format!("{}_", name)).unwrap_or(fname);
                         // Extract base method name (strip type suffix for display)
-                        let base_name = short_name.split('_').next().unwrap_or(short_name).to_string();
-                        let param_types: Vec<crate::ast::Type> = params.iter()
+                        let base_name = short_name
+                            .split('_')
+                            .next()
+                            .unwrap_or(short_name)
+                            .to_string();
+                        let param_types: Vec<crate::ast::Type> = params
+                            .iter()
                             .filter(|(n, _)| n != "this")
                             .map(|(_, t)| t.clone())
                             .collect();
@@ -615,9 +823,6 @@ impl Emitter {
                             is_static: *is_static,
                             mangled_name: fname.clone(),
                         });
-                        if *is_static {
-                            static_method_names.push(short_name.to_string());
-                        }
                     }
                 }
 
@@ -630,36 +835,52 @@ impl Emitter {
                             }
                         }
                     } else {
-                        errors.push(CompileError::new(0, 0, format!("Interface '{}' not found", iface_name)));
+                        errors.push(CompileError::new(
+                            0,
+                            0,
+                            format!("Interface '{}' not found", iface_name),
+                        ));
                     }
                 }
 
-                symbols.classes.insert(name.clone(), ClassInfo {
-                    name: name.clone(),
-                    fields: field_map,
-                    methods: method_sigs,
-                    static_fields: static_field_map,
-                    static_methods: static_method_names,
-                    parent: parent.clone(),
-                });
+                symbols.classes.insert(
+                    name.clone(),
+                    ClassInfo {
+                        name: name.clone(),
+                        fields: field_map,
+                        methods: method_sigs,
+                        static_fields: static_field_map,
+                        parent: parent.clone(),
+                    },
+                );
 
                 // Emit methods
                 let old_class = self.current_class.clone();
                 self.current_class = Some(name.clone());
                 for method in methods {
-                    self.emit_stmt(&method, symbols, errors);
+                    self.emit_stmt(method, symbols, errors);
                 }
                 self.current_class = old_class;
             }
             Stmt::FieldSet(obj, field, value) => {
                 if let Expr::Variable(var_name) = &**obj {
                     let mut is_static_global_idx = None;
-                    if symbols.classes.contains_key(var_name) && !symbols.locals.contains_key(var_name) && !symbols.variables.contains_key(var_name) {
+                    if symbols.classes.contains_key(var_name)
+                        && !symbols.locals.contains_key(var_name)
+                        && !symbols.variables.contains_key(var_name)
+                    {
                         if let Some(class_info) = symbols.classes.get(var_name) {
                             if let Some((global_idx, _ft)) = class_info.static_fields.get(field) {
                                 is_static_global_idx = Some(*global_idx);
                             } else {
-                                errors.push(CompileError::new(0, 0, format!("Static field '{}' not found in class '{}'", field, var_name)));
+                                errors.push(CompileError::new(
+                                    0,
+                                    0,
+                                    format!(
+                                        "Static field '{}' not found in class '{}'",
+                                        field, var_name
+                                    ),
+                                ));
                             }
                         }
                     }
@@ -677,8 +898,17 @@ impl Emitter {
                 let mut field_idx = None;
                 for cls in symbols.classes.values() {
                     if let Some((idx, vis, _ft)) = cls.fields.get(field) {
-                        if *vis == crate::ast::Visibility::Private && self.current_class.as_deref() != Some(cls.name.as_str()) {
-                            errors.push(CompileError::new(0, 0, format!("Cannot access private field '{}' of class '{}'", field, cls.name)));
+                        if *vis == crate::ast::Visibility::Private
+                            && self.current_class.as_deref() != Some(cls.name.as_str())
+                        {
+                            errors.push(CompileError::new(
+                                0,
+                                0,
+                                format!(
+                                    "Cannot access private field '{}' of class '{}'",
+                                    field, cls.name
+                                ),
+                            ));
                         }
                         field_idx = Some(*idx);
                         break;
@@ -687,7 +917,11 @@ impl Emitter {
                 let idx = match field_idx {
                     Some(idx) => idx,
                     None => {
-                        errors.push(CompileError::new(0, 0, format!("Field '{}' not found in any known class", field)));
+                        errors.push(CompileError::new(
+                            0,
+                            0,
+                            format!("Field '{}' not found in any known class", field),
+                        ));
                         return;
                     }
                 };
@@ -697,24 +931,106 @@ impl Emitter {
             }
             Stmt::Interface(name, signatures) => {
                 // Interfaces are compile-time only — no bytecode emitted
-                symbols.interfaces.insert(name.clone(), crate::semant::InterfaceInfo {
-                    name: name.clone(),
-                    method_signatures: signatures.clone(),
-                });
+                symbols.interfaces.insert(
+                    name.clone(),
+                    crate::semant::InterfaceInfo {
+                        method_signatures: signatures.clone(),
+                    },
+                );
             }
             Stmt::Error => {
                 // Shouldn't reach emission with parse errors; nothing to emit.
             }
-            Stmt::Import(_) => {
-                // Imports are resolved by the compiler driver (main.rs) before
-                // emission and produce no bytecode of their own.
+            Stmt::Import(_) | Stmt::ExternFunction(_, _) => {
+                // Imports and external declarations are compile-time only.
+            }
+            Stmt::Match(subject, arms) => {
+                // Lower match to if/else chains: match s { p1 => b1; p2 => b2; _ => b3 }
+                // becomes if s == p1 { b1 } else if s == p2 { b2 } else { b3 }
+                let last_idx = arms.len().saturating_sub(1);
+                let mut end_jumps: Vec<usize> = Vec::new();
+
+                for (i, (pattern, body)) in arms.iter().enumerate() {
+                    let is_last = i == last_idx;
+                    let is_wildcard = matches!(pattern, Pattern::Wildcard);
+
+                    if !is_wildcard {
+                        // Emit subject == pattern comparison
+                        self.emit_expr(subject, symbols, errors);
+                        if let Pattern::Literal(lit) = pattern {
+                            self.emit_expr(lit, symbols, errors);
+                        }
+                        self.emit_byte(OpCode::Equal.into());
+
+                        let skip_jump = self.emit_jump(OpCode::JumpIfFalse.into());
+
+                        // Emit arm body
+                        for stmt in body {
+                            self.emit_stmt(stmt, symbols, errors);
+                        }
+
+                        if !is_last {
+                            let end_jump = self.emit_jump(OpCode::Jump.into());
+                            self.patch_jump(skip_jump);
+                            end_jumps.push(end_jump);
+                        } else {
+                            self.patch_jump(skip_jump);
+                        }
+                    } else {
+                        // Wildcard arm: emit body directly (the else branch).
+                        for stmt in body {
+                            self.emit_stmt(stmt, symbols, errors);
+                        }
+                    }
+                }
+
+                // Patch all end jumps to point here (after the match).
+                for end_jump in end_jumps {
+                    self.patch_jump(end_jump);
+                }
+            }
+            Stmt::Throw(expr) => {
+                self.emit_expr(expr, symbols, errors);
+                self.emit_byte(OpCode::Throw.into());
+            }
+            Stmt::Try(try_body, catch_var, catch_body) => {
+                // Emit OP_TRY with a 4-byte placeholder for the catch address.
+                self.emit_byte(OpCode::Try.into());
+                let try_patch_index = self.code.len();
+                self.code.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+                self.try_patches.push(try_patch_index);
+
+                // Emit try body.
+                self.emit_stmt(try_body, symbols, errors);
+
+                // Pop handler and jump over the catch block.
+                self.emit_byte(OpCode::EndTry.into());
+                let skip_catch = self.emit_jump(OpCode::Jump.into());
+
+                // Patch OP_TRY's catch address to point here (start of catch block).
+                let catch_addr = self.code.len() as i32;
+                let bytes = catch_addr.to_le_bytes();
+                self.code[try_patch_index..try_patch_index + 4].copy_from_slice(&bytes);
+
+                // Catch block: exception value is on the stack. Store it in the
+                // catch variable (allocated as a local), then run the catch body.
+                let catch_idx = symbols.next_local_index;
+                symbols.locals.insert(catch_var.clone(), catch_idx);
+                symbols.next_local_index += 1;
+
+                self.emit_byte(OpCode::StoreLocal.into());
+                self.emit_int(catch_idx as i32);
+
+                self.emit_stmt(catch_body, symbols, errors);
+
+                // Patch the skip-catch jump to point here.
+                self.patch_jump(skip_catch);
+
+                // Remove catch variable from locals.
+                symbols.locals.remove(catch_var);
+                symbols.next_local_index = catch_idx;
             }
         }
-    }
-
-    pub fn write_file(&self, path: &str) -> std::io::Result<()> {
-        std::fs::write(path, Self::to_bytes(self))?;
-        Ok(())
     }
 
     // Serializes the compiled program to the .amc binary format in memory.
@@ -733,6 +1049,27 @@ impl Emitter {
 
         out.extend_from_slice(&(self.code.len() as u32).to_le_bytes());
         out.extend_from_slice(&self.code);
+
+        // Optional link trailer (multi-module archives). Older loaders stop
+        // reading after the code, so single-module images are unchanged.
+        //   "AMLK"
+        //   export_count u32, then { name_len u32, name, address u32 }
+        //   import_count u32, then { name_len u32, name, operand_offset u32 }
+        if self.emit_link_info {
+            out.extend_from_slice(b"AMLK");
+            out.extend_from_slice(&(self.exports.len() as u32).to_le_bytes());
+            for (name, addr) in &self.exports {
+                out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                out.extend_from_slice(name.as_bytes());
+                out.extend_from_slice(&addr.to_le_bytes());
+            }
+            out.extend_from_slice(&(self.imports.len() as u32).to_le_bytes());
+            for (offset, name) in &self.imports {
+                out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                out.extend_from_slice(name.as_bytes());
+                out.extend_from_slice(&(*offset as u32).to_le_bytes());
+            }
+        }
         out
     }
 }

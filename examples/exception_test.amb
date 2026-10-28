@@ -1,0 +1,22 @@
+// exception_test.amb - try/catch/throw
+try {
+    print "before"
+    throw "boom"
+    print "not reached"
+} catch e {
+    print "caught:"
+    print e
+}
+int safeDiv(int a, int b) {
+    if b == 0 {
+        throw "div by zero"
+    }
+    return a / b
+}
+try {
+    print safeDiv(10, 2)
+    print safeDiv(1, 0)
+} catch err {
+    print err
+}
+print "done"

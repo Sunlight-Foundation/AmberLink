@@ -1,0 +1,14 @@
+// fold_test.amb
+// Exercises constant folding: every value below must be identical with and
+// without --no-opt. Run: ambc examples/fold_test.amb && avm examples/fold_test.amc
+
+print 2 + 3 * 4
+print (10 - 4) / 2
+print 2.5 * 4.0
+print 1 < 2
+print 3.0 == 3.0
+print "foo" + "bar"
+print "a" == "a"
+print true != false
+int x = 40 + 2
+print x

@@ -8,7 +8,10 @@
 #include <thread>
 #include <fstream>
 #include <sstream>
+#include <unordered_map>
+#include <cstring>
 #include "resources.hpp"
+#include "threads.hpp"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -65,7 +68,7 @@ static Value native_input(std::vector<Value>& args, std::vector<std::string>& co
     (void)heap;
     if (!args.empty()) throw std::runtime_error("input expects 0 arguments.");
     std::string line;
-    std::getline(std::cin, line);
+    { GilRelease gil_released; std::getline(std::cin, line); }
     return make_string_const(constants, line);
 }
 
@@ -131,6 +134,7 @@ static Value native_printStr(std::vector<Value>& args, std::vector<std::string>&
     if (args.size() != 1) throw std::runtime_error("printStr expects 1 argument.");
     const Value& v = args[0];
     if (v.type == ValueType::STRING_CONST) {
+        std::lock_guard<std::mutex> out_lock(g_out_mutex);
         std::cout << constants[v.as.str_idx];
     } else {
         throw std::runtime_error("printStr expects a String.");
@@ -182,7 +186,7 @@ static Value native_sleep(std::vector<Value>& args, std::vector<std::string>& co
     (void)heap;
     if (args.size() != 1) throw std::runtime_error("sleep expects 1 argument.");
     if (args[0].type != ValueType::INT) throw std::runtime_error("sleep expects an int (milliseconds).");
-    std::this_thread::sleep_for(std::chrono::milliseconds(args[0].as.i));
+    { GilRelease gil_released; std::this_thread::sleep_for(std::chrono::milliseconds(args[0].as.i)); }
     return Value();
 }
 
@@ -315,6 +319,56 @@ static bool value_equal(const Value& a, const Value& b) {
     return false;
 }
 
+// Hash of a Value, consistent with value_equal: equal values hash equal.
+// (STRING_CONST keys compare by pool index, so the index — not the content —
+// is hashed. Float -0.0 is normalized to +0.0 to match == semantics.)
+static uint64_t value_hash(const Value& v) {
+    uint64_t h = static_cast<uint64_t>(static_cast<int>(v.type));
+    uint64_t p = 0;
+    switch (v.type) {
+        case ValueType::INT: p = static_cast<uint64_t>(static_cast<uint32_t>(v.as.i)); break;
+        case ValueType::FLOAT: {
+            float f = v.as.f;
+            if (f == 0.0f) f = 0.0f; // normalize -0.0
+            uint32_t b = 0;
+            std::memcpy(&b, &f, sizeof(b));
+            p = b;
+            break;
+        }
+        case ValueType::BOOL: p = v.as.b ? 1u : 0u; break;
+        case ValueType::CHAR: p = static_cast<uint64_t>(static_cast<unsigned char>(v.as.c)); break;
+        case ValueType::STRING_CONST: p = static_cast<uint64_t>(static_cast<uint32_t>(v.as.str_idx)); break;
+        case ValueType::OBJ_REF: p = static_cast<uint64_t>(static_cast<uint32_t>(v.as.obj_ref)); break;
+    }
+    // splitmix64 finalizer over the combined input.
+    uint64_t z = h + 0x9E3779B97F4A7C15ULL + p;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+// Finds key in hm->entries via the hash index. Returns true + position if present.
+static bool map_find(HashMapObject* hm, const Value& key, size_t& pos) {
+    auto it = hm->index.find(value_hash(key));
+    if (it == hm->index.end()) return false;
+    for (size_t p : it->second) {
+        if (p < hm->entries.size() && value_equal(hm->entries[p].key, key)) {
+            pos = p;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Rebuilds the whole index. Used after removal (which shifts positions);
+// simple and obviously correct, and removal is already O(n) via vector erase.
+static void map_rebuild_index(HashMapObject* hm) {
+    hm->index.clear();
+    for (size_t i = 0; i < hm->entries.size(); ++i) {
+        hm->index[value_hash(hm->entries[i].key)].push_back(i);
+    }
+}
+
 // --- mapNew() : HashMap ---
 static Value native_mapNew(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
     (void)args; (void)constants;
@@ -329,10 +383,10 @@ static Value native_mapPut(std::vector<Value>& args, std::vector<std::string>& c
     if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapPut expects a HashMap.");
     HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
     if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapPut expects a HashMap.");
-    for (HashEntry& entry : hm->entries) {
-        if (value_equal(entry.key, args[1])) { entry.value = args[2]; return Value(); }
-    }
+    size_t pos = 0;
+    if (map_find(hm, args[1], pos)) { hm->entries[pos].value = args[2]; return Value(); }
     hm->entries.push_back(HashEntry(args[1], args[2]));
+    hm->index[value_hash(args[1])].push_back(hm->entries.size() - 1);
     return Value();
 }
 
@@ -344,9 +398,8 @@ static Value native_mapGet(std::vector<Value>& args, std::vector<std::string>& c
     if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapGet expects a HashMap.");
     HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
     if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapGet expects a HashMap.");
-    for (const HashEntry& entry : hm->entries) {
-        if (value_equal(entry.key, args[1])) return entry.value;
-    }
+    size_t pos = 0;
+    if (map_find(hm, args[1], pos)) return hm->entries[pos].value;
     return Value(); // absent key -> int 0
 }
 
@@ -357,10 +410,8 @@ static Value native_mapContainsKey(std::vector<Value>& args, std::vector<std::st
     if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapContainsKey expects a HashMap.");
     HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
     if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapContainsKey expects a HashMap.");
-    for (const HashEntry& entry : hm->entries) {
-        if (value_equal(entry.key, args[1])) return Value(true);
-    }
-    return Value(false);
+    size_t pos = 0;
+    return Value(map_find(hm, args[1], pos));
 }
 
 // --- mapRemove(map, key) : void ---
@@ -370,11 +421,10 @@ static Value native_mapRemove(std::vector<Value>& args, std::vector<std::string>
     if (args[0].type != ValueType::OBJ_REF) throw std::runtime_error("mapRemove expects a HashMap.");
     HashMapObject* hm = static_cast<HashMapObject*>(heap.objects[args[0].as.obj_ref]);
     if (!hm || hm->type != ObjType::HASH_MAP) throw std::runtime_error("mapRemove expects a HashMap.");
-    for (size_t i = 0; i < hm->entries.size(); ++i) {
-        if (value_equal(hm->entries[i].key, args[1])) {
-            hm->entries.erase(hm->entries.begin() + i);
-            break;
-        }
+    size_t pos = 0;
+    if (map_find(hm, args[1], pos)) {
+        hm->entries.erase(hm->entries.begin() + pos);
+        map_rebuild_index(hm);
     }
     return Value();
 }
@@ -606,7 +656,10 @@ static Value native_httpGet(std::vector<Value>& args, std::vector<std::string>& 
     if (args.size() != 1) throw std::runtime_error("httpGet expects 1 argument.");
     if (args[0].type != ValueType::STRING_CONST) throw std::runtime_error("httpGet expects a String URL.");
     std::string out;
-    if (!http_fetch(constants[args[0].as.str_idx], "GET", "", out)) return make_string_const(constants, "");
+    bool ok;
+    std::string url = constants[args[0].as.str_idx];
+    { GilRelease gil_released; ok = http_fetch(url, "GET", "", out); }
+    if (!ok) return make_string_const(constants, "");
     return make_string_const(constants, out);
 }
 
@@ -618,8 +671,215 @@ static Value native_httpPost(std::vector<Value>& args, std::vector<std::string>&
     if (args[0].type != ValueType::STRING_CONST) throw std::runtime_error("httpPost expects a String URL.");
     if (args[1].type != ValueType::STRING_CONST) throw std::runtime_error("httpPost expects a String body.");
     std::string out;
-    if (!http_fetch(constants[args[0].as.str_idx], "POST", constants[args[1].as.str_idx], out)) return make_string_const(constants, "");
+    bool ok;
+    std::string url = constants[args[0].as.str_idx];
+    std::string body = constants[args[1].as.str_idx];
+    { GilRelease gil_released; ok = http_fetch(url, "POST", body, out); }
+    if (!ok) return make_string_const(constants, "");
     return make_string_const(constants, out);
+}
+
+// --- FFI: call C functions in shared libraries ---
+// Only int and string arguments are marshalled in v1:
+//   loadLib(path) -> handle (int, 0 on failure)
+//   freeLib(handle) -> bool
+//   callInt(handle, symbol, a, b) -> int f(int, int)
+//   callStr(handle, symbol, s) -> int f(const char*)
+// A missing library yields handle 0; a bad handle or missing symbol is a
+// runtime error. Calling with the wrong C signature is undefined (as in C).
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+
+// Open library handles. Slot index+1 is the Amberlink handle (0 = invalid),
+// so freed slots stay reserved and existing handles never shift.
+static std::vector<void*> ffi_libs;
+
+static void* ffi_get_lib(int32_t handle) {
+    if (handle <= 0 || (size_t)handle > ffi_libs.size()) return nullptr;
+    return ffi_libs[(size_t)handle - 1];
+}
+
+static void* ffi_symbol(void* lib, const std::string& name) {
+#ifdef _WIN32
+    return (void*)GetProcAddress((HMODULE)lib, name.c_str());
+#else
+    return dlsym(lib, name.c_str());
+#endif
+}
+
+// --- loadLib(path) : int ---
+static Value native_loadLib(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)heap;
+    if (args.size() != 1) throw std::runtime_error("loadLib expects 1 argument.");
+    if (args[0].type != ValueType::STRING_CONST) throw std::runtime_error("loadLib expects a String path.");
+    const std::string& path = constants[args[0].as.str_idx];
+#ifdef _WIN32
+    HMODULE h = LoadLibraryA(path.c_str());
+    if (!h) return Value((int32_t)0);
+    ffi_libs.push_back((void*)h);
+#else
+    void* h = dlopen(path.c_str(), RTLD_LAZY);
+    if (!h) return Value((int32_t)0);
+    ffi_libs.push_back(h);
+#endif
+    return Value((int32_t)ffi_libs.size());
+}
+
+// --- freeLib(handle) : bool ---
+static Value native_freeLib(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)heap; (void)constants;
+    if (args.size() != 1) throw std::runtime_error("freeLib expects 1 argument.");
+    if (args[0].type != ValueType::INT) throw std::runtime_error("freeLib expects an int handle.");
+    int32_t handle = args[0].as.i;
+    void* h = ffi_get_lib(handle);
+    if (!h) return Value(false);
+#ifdef _WIN32
+    FreeLibrary((HMODULE)h);
+#else
+    dlclose(h);
+#endif
+    ffi_libs[(size_t)handle - 1] = nullptr;
+    return Value(true);
+}
+
+// --- callInt(handle, symbol, a, b) : int ---
+static Value native_callInt(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)heap;
+    if (args.size() != 4) throw std::runtime_error("callInt expects 4 arguments.");
+    if (args[0].type != ValueType::INT) throw std::runtime_error("callInt expects an int handle.");
+    if (args[1].type != ValueType::STRING_CONST) throw std::runtime_error("callInt expects a String symbol.");
+    if (args[2].type != ValueType::INT || args[3].type != ValueType::INT) throw std::runtime_error("callInt expects int arguments.");
+    void* lib = ffi_get_lib(args[0].as.i);
+    if (!lib) throw std::runtime_error("callInt: bad library handle.");
+    const std::string& name = constants[args[1].as.str_idx];
+    void* sym = ffi_symbol(lib, name);
+    if (!sym) throw std::runtime_error("callInt: symbol not found: " + name);
+    typedef int (*Fn2)(int, int);
+    Fn2 fn = reinterpret_cast<Fn2>(sym);
+    int r;
+    { GilRelease gil_released; r = fn(args[2].as.i, args[3].as.i); }
+    return Value((int32_t)r);
+}
+
+// --- callStr(handle, symbol, s) : int ---
+static Value native_callStr(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)heap;
+    if (args.size() != 3) throw std::runtime_error("callStr expects 3 arguments.");
+    if (args[0].type != ValueType::INT) throw std::runtime_error("callStr expects an int handle.");
+    if (args[1].type != ValueType::STRING_CONST) throw std::runtime_error("callStr expects a String symbol.");
+    if (args[2].type != ValueType::STRING_CONST) throw std::runtime_error("callStr expects a String argument.");
+    void* lib = ffi_get_lib(args[0].as.i);
+    if (!lib) throw std::runtime_error("callStr: bad library handle.");
+    const std::string& name = constants[args[1].as.str_idx];
+    void* sym = ffi_symbol(lib, name);
+    if (!sym) throw std::runtime_error("callStr: symbol not found: " + name);
+    typedef int (*FnS)(const char*);
+    FnS fn = reinterpret_cast<FnS>(sym);
+    int r;
+    std::string arg = constants[args[2].as.str_idx];
+    { GilRelease gil_released; r = fn(arg.c_str()); }
+    return Value((int32_t)r);
+}
+
+// --- join(handle) : value ---
+// Blocks until the thread finishes and yields its return value. Re-raises a
+// worker's runtime error in the joining thread. Re-joining returns the same
+// outcome; concurrent double-join of one handle is a runtime error.
+static Value native_join(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    (void)constants; (void)heap;
+    if (args.size() != 1) throw std::runtime_error("join expects 1 argument.");
+    if (args[0].type != ValueType::INT) throw std::runtime_error("join expects an int handle.");
+    auto slot = threads_get(args[0].as.i);
+    if (!slot) throw std::runtime_error("join: bad thread handle.");
+    {
+        std::lock_guard<std::mutex> lk(slot->m);
+        if (slot->finished) {
+            slot->joined = true;
+            // A finished thread is still joinable until reaped; join here
+            // (returns immediately) so no joinable thread outlives the slot.
+            if (slot->th.joinable()) slot->th.join();
+            if (!slot->error.empty()) throw std::runtime_error(slot->error);
+            return slot->result;
+        }
+        if (slot->join_started) throw std::runtime_error("join: thread is already being joined.");
+        slot->join_started = true;
+    }
+    // Drop the GIL while blocked so the worker (and others) can run.
+    // The slot is heap-allocated and reference-counted, so it cannot move.
+    { GilRelease gil_released; slot->th.join(); }
+    {
+        std::lock_guard<std::mutex> lk(slot->m);
+        slot->joined = true;
+        if (!slot->error.empty()) throw std::runtime_error(slot->error);
+        return slot->result;
+    }
+}
+
+// --- FFI buffers: int f(int*, int) over Array contents ---
+// Flattening rule: every element must be INT, else a runtime error. The flat
+// buffer is thread-local, so the GIL can be released around the C call.
+
+static ArrayObject* ffi_require_array(std::vector<Value>& args, Heap& heap, size_t idx, const char* fn) {
+    if (args[idx].type != ValueType::OBJ_REF) throw std::runtime_error(std::string(fn) + " expects an Array argument.");
+    ArrayObject* arr = static_cast<ArrayObject*>(heap.objects[args[idx].as.obj_ref]);
+    if (!arr || arr->type != ObjType::ARRAY) throw std::runtime_error(std::string(fn) + " expects an Array argument.");
+    return arr;
+}
+
+static std::vector<int32_t> ffi_flatten_ints(ArrayObject* arr, const char* fn) {
+    std::vector<int32_t> buf;
+    buf.reserve(arr->data.size());
+    for (const Value& v : arr->data) {
+        if (v.type != ValueType::INT) throw std::runtime_error(std::string(fn) + " expects an int Array.");
+        buf.push_back(v.as.i);
+    }
+    return buf;
+}
+
+static void* ffi_require_symbol(void* lib, const std::string& name, const char* fn) {
+    if (!lib) throw std::runtime_error(std::string(fn) + ": bad library handle.");
+    void* sym = ffi_symbol(lib, name);
+    if (!sym) throw std::runtime_error(std::string(fn) + ": symbol not found: " + name);
+    return sym;
+}
+
+// --- callInts(handle, symbol, arr) : int ---
+// Calls int f(int* data, int len) read-only over a copy of the array.
+static Value native_callInts(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    if (args.size() != 3) throw std::runtime_error("callInts expects 3 arguments.");
+    if (args[0].type != ValueType::INT) throw std::runtime_error("callInts expects an int handle.");
+    if (args[1].type != ValueType::STRING_CONST) throw std::runtime_error("callInts expects a String symbol.");
+    void* sym = ffi_require_symbol(ffi_get_lib(args[0].as.i), constants[args[1].as.str_idx], "callInts");
+    ArrayObject* arr = ffi_require_array(args, heap, 2, "callInts");
+    std::vector<int32_t> buf = ffi_flatten_ints(arr, "callInts");
+    typedef int (*FnBuf)(int*, int);
+    FnBuf fn = reinterpret_cast<FnBuf>(sym);
+    static_assert(sizeof(int) == 4, "FFI int must be 32-bit");
+    int r;
+    { GilRelease gil_released; r = fn(buf.data(), static_cast<int>(buf.size())); }
+    return Value((int32_t)r);
+}
+
+// --- callIntsMut(handle, symbol, arr) : int ---
+// Same call, then writes the buffer back into the array as Integers.
+// Array length is immutable from C.
+static Value native_callIntsMut(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
+    if (args.size() != 3) throw std::runtime_error("callIntsMut expects 3 arguments.");
+    if (args[0].type != ValueType::INT) throw std::runtime_error("callIntsMut expects an int handle.");
+    if (args[1].type != ValueType::STRING_CONST) throw std::runtime_error("callIntsMut expects a String symbol.");
+    void* sym = ffi_require_symbol(ffi_get_lib(args[0].as.i), constants[args[1].as.str_idx], "callIntsMut");
+    ArrayObject* arr = ffi_require_array(args, heap, 2, "callIntsMut");
+    std::vector<int32_t> buf = ffi_flatten_ints(arr, "callIntsMut");
+    typedef int (*FnBuf)(int*, int);
+    FnBuf fn = reinterpret_cast<FnBuf>(sym);
+    static_assert(sizeof(int) == 4, "FFI int must be 32-bit");
+    int r;
+    { GilRelease gil_released; r = fn(buf.data(), static_cast<int>(buf.size())); }
+    for (size_t i = 0; i < buf.size(); ++i) arr->data[i] = Value(buf[i]);
+    return Value((int32_t)r);
 }
 
 std::vector<NativeEntry>& registry() {
@@ -664,6 +924,13 @@ std::vector<NativeEntry>& registry() {
         {native_resourceNames, 0},
         {native_httpGet, 1},
         {native_httpPost, 2},
+        {native_loadLib, 1},
+        {native_freeLib, 1},
+        {native_callInt, 4},
+        {native_callStr, 3},
+        {native_join, 1},
+        {native_callInts, 3},
+        {native_callIntsMut, 3},
     };
     return reg;
 }

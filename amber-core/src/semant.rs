@@ -1,9 +1,8 @@
 // amber-core/src/semant.rs
-use std::collections::HashMap;
-use crate::ast::{Expr, Type, Op};
+use crate::ast::{Expr, Op, Type};
+use std::collections::{HashMap, HashSet};
 
 pub struct FunctionInfo {
-    pub name: String,
     pub address: u32,
     pub return_type: Type,
 }
@@ -23,20 +22,17 @@ pub struct ClassInfo {
     pub fields: HashMap<String, (u32, crate::ast::Visibility, crate::ast::Type)>,
     pub methods: Vec<MethodSignature>,
     pub static_fields: HashMap<String, (u32, crate::ast::Type)>,
-    pub static_methods: Vec<String>,
     pub parent: Option<String>,
 }
 
 #[derive(Clone)]
 pub struct InterfaceInfo {
-    pub name: String,
-    pub method_signatures: Vec<(String, crate::ast::Type, Vec<(String, crate::ast::Type)>)>,
+    pub method_signatures: Vec<crate::ast::InterfaceMethodSignature>,
 }
 
 // A built-in native function implemented in the VM (C++), callable from Amberlink source.
 #[derive(Clone)]
 pub struct NativeInfo {
-    pub name: String,
     pub id: u16,
     pub param_types: Vec<crate::ast::Type>,
     pub return_type: crate::ast::Type,
@@ -47,6 +43,9 @@ pub struct SymbolTable {
     pub classes: HashMap<String, ClassInfo>,
     pub interfaces: HashMap<String, InterfaceInfo>,
     pub natives: HashMap<String, NativeInfo>,
+    // Functions declared by separately-compiled modules (multi-module archives).
+    // Calls to these are left unresolved and recorded as link-time imports.
+    pub externs: HashSet<String>,
     pub variables: HashMap<String, u32>,
     pub locals: HashMap<String, u32>,
     pub variable_types: HashMap<String, crate::ast::Type>,
@@ -61,6 +60,7 @@ impl SymbolTable {
             classes: HashMap::new(),
             interfaces: HashMap::new(),
             natives: HashMap::new(),
+            externs: HashSet::new(),
             variables: HashMap::new(),
             locals: HashMap::new(),
             variable_types: HashMap::new(),
@@ -76,7 +76,11 @@ impl SymbolTable {
         let mut register = |name: &str, id: u16, return_type: Type, param_types: Vec<Type>| {
             self.natives.insert(
                 name.to_string(),
-                NativeInfo { name: name.to_string(), id, param_types, return_type },
+                NativeInfo {
+                    id,
+                    param_types,
+                    return_type,
+                },
             );
         };
         // Order must match natives.cpp registry().
@@ -94,23 +98,68 @@ impl SymbolTable {
         register("clock", 11, Type::Float, vec![]);
         register("strLen", 12, Type::Int, vec![Type::String]);
         register("strCharAt", 13, Type::Char, vec![Type::String, Type::Int]);
-        register("strSubstring", 14, Type::String, vec![Type::String, Type::Int, Type::Int]);
-        register("strIndexOf", 15, Type::Int, vec![Type::String, Type::String]);
-        register("strEquals", 16, Type::Bool, vec![Type::String, Type::String]);
+        register(
+            "strSubstring",
+            14,
+            Type::String,
+            vec![Type::String, Type::Int, Type::Int],
+        );
+        register(
+            "strIndexOf",
+            15,
+            Type::Int,
+            vec![Type::String, Type::String],
+        );
+        register(
+            "strEquals",
+            16,
+            Type::Bool,
+            vec![Type::String, Type::String],
+        );
         register("strToUpper", 17, Type::String, vec![Type::String]);
         register("strToLower", 18, Type::String, vec![Type::String]);
         register("mathSqrt", 19, Type::Float, vec![Type::Float]);
         register("mathPow", 20, Type::Float, vec![Type::Float, Type::Float]);
         // Collections (HashMap, LinkedList) — order must match natives.cpp registry().
         register("mapNew", 21, Type::Unknown, vec![]);
-        register("mapPut", 22, Type::Void, vec![Type::Unknown, Type::Unknown, Type::Unknown]);
-        register("mapGet", 23, Type::Unknown, vec![Type::Unknown, Type::Unknown]);
-        register("mapContainsKey", 24, Type::Bool, vec![Type::Unknown, Type::Unknown]);
-        register("mapRemove", 25, Type::Void, vec![Type::Unknown, Type::Unknown]);
+        register(
+            "mapPut",
+            22,
+            Type::Void,
+            vec![Type::Unknown, Type::Unknown, Type::Unknown],
+        );
+        register(
+            "mapGet",
+            23,
+            Type::Unknown,
+            vec![Type::Unknown, Type::Unknown],
+        );
+        register(
+            "mapContainsKey",
+            24,
+            Type::Bool,
+            vec![Type::Unknown, Type::Unknown],
+        );
+        register(
+            "mapRemove",
+            25,
+            Type::Void,
+            vec![Type::Unknown, Type::Unknown],
+        );
         register("mapSize", 26, Type::Int, vec![Type::Unknown]);
         register("llNew", 27, Type::Unknown, vec![]);
-        register("llAddFirst", 28, Type::Void, vec![Type::Unknown, Type::Unknown]);
-        register("llAddLast", 29, Type::Void, vec![Type::Unknown, Type::Unknown]);
+        register(
+            "llAddFirst",
+            28,
+            Type::Void,
+            vec![Type::Unknown, Type::Unknown],
+        );
+        register(
+            "llAddLast",
+            29,
+            Type::Void,
+            vec![Type::Unknown, Type::Unknown],
+        );
         register("llRemoveFirst", 30, Type::Unknown, vec![Type::Unknown]);
         register("llRemoveLast", 31, Type::Unknown, vec![Type::Unknown]);
         register("llGet", 32, Type::Unknown, vec![Type::Unknown, Type::Int]);
@@ -122,14 +171,49 @@ impl SymbolTable {
         register("resourceNames", 37, Type::String, vec![]);
         // Networking (minimal HTTP/1.0 client, http:// only). Order must match natives.cpp registry().
         register("httpGet", 38, Type::String, vec![Type::String]);
-        register("httpPost", 39, Type::String, vec![Type::String, Type::String]);
+        register(
+            "httpPost",
+            39,
+            Type::String,
+            vec![Type::String, Type::String],
+        );
+        // FFI (call C functions in shared libraries). Order must match natives.cpp registry().
+        register("loadLib", 40, Type::Int, vec![Type::String]);
+        register("freeLib", 41, Type::Bool, vec![Type::Int]);
+        register(
+            "callInt",
+            42,
+            Type::Int,
+            vec![Type::Int, Type::String, Type::Int, Type::Int],
+        );
+        register(
+            "callStr",
+            43,
+            Type::Int,
+            vec![Type::Int, Type::String, Type::String],
+        );
+        // Threads: join(handle) blocks and yields the worker's return value.
+        register("join", 44, Type::Unknown, vec![Type::Int]);
+        // FFI buffers: int f(int*, int) over Array contents, length derived.
+        register(
+            "callInts",
+            45,
+            Type::Int,
+            vec![Type::Int, Type::String, Type::Unknown],
+        );
+        register(
+            "callIntsMut",
+            46,
+            Type::Int,
+            vec![Type::Int, Type::String, Type::Unknown],
+        );
     }
 
     pub fn get_var_type(&self, name: &str) -> Option<Type> {
         if let Some(t) = self.variable_types.get(name) {
             return Some(t.clone());
         }
-        for (_, class_info) in &self.classes {
+        for class_info in self.classes.values() {
             if let Some((_, _, t)) = class_info.fields.get(name) {
                 return Some(t.clone());
             }
@@ -194,8 +278,12 @@ impl SymbolTable {
                             None
                         }
                     }
-                    Op::LessThan | Op::GreaterThan | Op::Equals | Op::NotEquals
-                    | Op::LessEquals | Op::GreaterEquals => Some(Type::Bool),
+                    Op::LessThan
+                    | Op::GreaterThan
+                    | Op::Equals
+                    | Op::NotEquals
+                    | Op::LessEquals
+                    | Op::GreaterEquals => Some(Type::Bool),
                 }
             }
             Expr::ListGet(list_expr, _) => {
@@ -210,6 +298,9 @@ impl SymbolTable {
                     self.natives.get(name).map(|n| n.return_type.clone())
                 }
             }
+            // spawn yields a thread-handle int; join() returns the worker's value.
+            Expr::Spawn(_, _) => Some(Type::Int),
+            Expr::Null => Some(Type::Nullable(Box::new(Type::Unknown))), // null: assignable to any Nullable(T)
             Expr::Error => Some(Type::Unknown),
         }
     }
@@ -217,16 +308,16 @@ impl SymbolTable {
     // Finds the first class containing a method with the given name (searching
     // parent chains), used when we cannot resolve a MethodCall receiver's type.
     fn find_class_with_method(&self, method: &str) -> Option<&ClassInfo> {
-        for ci in self.classes.values() {
-            if self.class_or_parent_has_method(ci, method) {
-                return Some(ci);
-            }
-        }
-        None
+        self.classes
+            .values()
+            .find(|&ci| self.class_or_parent_has_method(ci, method))
+            .map(|v| v as _)
     }
 
     fn class_or_parent_has_method(&self, ci: &ClassInfo, method: &str) -> bool {
-        if ci.methods.iter().any(|m| m.name == *method) { return true; }
+        if ci.methods.iter().any(|m| m.name == *method) {
+            return true;
+        }
         match &ci.parent {
             Some(parent) => match self.classes.get(parent) {
                 Some(p) => self.class_or_parent_has_method(p, method),
@@ -237,14 +328,73 @@ impl SymbolTable {
     }
 
     pub fn types_compatible(&self, expected: &Type, actual: &Type) -> bool {
-        if expected == actual { return true; }
+        if expected == actual {
+            return true;
+        }
         // Allow int -> float promotion
-        if matches!(expected, Type::Float) && matches!(actual, Type::Int) { return true; }
+        if matches!(expected, Type::Float) && matches!(actual, Type::Int) {
+            return true;
+        }
         // Unknown matches anything; the real check is deferred.
-        if matches!(expected, Type::Unknown) || matches!(actual, Type::Unknown) { return true; }
+        if matches!(expected, Type::Unknown) || matches!(actual, Type::Unknown) {
+            return true;
+        }
+        // null (Nullable(Unknown)) is assignable to any Nullable(T)
+        if let (Type::Nullable(_), Type::Nullable(inner)) = (expected, actual) {
+            if matches!(**inner, Type::Unknown) {
+                return true;
+            }
+        }
+        // T -> T?: a non-nullable value is assignable to a nullable variable
+        if let Type::Nullable(inner) = expected {
+            if **inner == *actual {
+                return true;
+            }
+        }
+        // Nullable(T1) -> Nullable(T2) if T1 -> T2
+        if let (Type::Nullable(inner1), Type::Nullable(inner2)) = (expected, actual) {
+            return self.types_compatible(inner1, inner2);
+        }
+        // T? cannot be assigned to non-nullable T
+        if matches!(actual, Type::Nullable(_)) && !matches!(expected, Type::Nullable(_)) {
+            return false;
+        }
+        // Raw type <-> generic: List is assignable to List<T> and vice versa (type erasure).
+        if let (Type::Class(expected_name), Type::Generic(name, _)) = (expected, actual) {
+            if name == expected_name {
+                return true;
+            }
+        }
+        if let (Type::Generic(name, _), Type::Class(actual_name)) = (expected, actual) {
+            if name == actual_name {
+                return true;
+            }
+        }
+        // Raw List <-> generic List<T> (List is its own variant, not Class("List")).
+        if let (Type::Generic(name, _), Type::List) = (expected, actual) {
+            if name == "List" {
+                return true;
+            }
+        }
+        if let (Type::List, Type::Generic(name, _)) = (expected, actual) {
+            if name == "List" {
+                return true;
+            }
+        }
         // Inheritance: a subclass instance satisfies a parent type.
         if let (Type::Class(exp), Type::Class(act)) = (expected, actual) {
-            if self.is_subclass(act, exp) { return true; }
+            if self.is_subclass(act, exp) {
+                return true;
+            }
+        }
+        // Generics: same class name, compatible type arguments.
+        if let (Type::Generic(name1, args1), Type::Generic(name2, args2)) = (expected, actual) {
+            if name1 == name2 && args1.len() == args2.len() {
+                return args1
+                    .iter()
+                    .zip(args2.iter())
+                    .all(|(a, b)| self.types_compatible(a, b));
+            }
         }
         false
     }
@@ -252,7 +402,9 @@ impl SymbolTable {
     fn is_subclass(&self, child: &str, ancestor: &str) -> bool {
         let mut cur = Some(child.to_string());
         while let Some(c) = cur {
-            if &c == ancestor { return true; }
+            if c == ancestor {
+                return true;
+            }
             cur = self.classes.get(&c).and_then(|ci| ci.parent.clone());
         }
         false

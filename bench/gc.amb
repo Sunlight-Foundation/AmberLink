@@ -1,0 +1,27 @@
+// bench/gc.amb — GC pressure: many live heap objects + frequent collections.
+// 20k live Points, then 20k string concats (each concat asks for a collection).
+// Higher is worse.
+class Point {
+    int x
+    int y
+}
+
+List keep = new List()
+int i = 0
+while i < 20000 {
+    var p = new Point()
+    p.x = i
+    p.y = i
+    keep.add(p)
+    i = i + 1
+}
+
+float t0 = clock()
+String s = ""
+int j = 0
+while j < 20000 {
+    s = s + "y"
+    j = j + 1
+}
+print strLen(s)
+print clock() - t0

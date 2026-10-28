@@ -1,0 +1,22 @@
+// ffi_buf_test.amb
+// Exercises FFI array marshaling. Needs the compiled fixture:
+//   Windows: gcc -shared -o bin/fficmp.dll examples/resources/fficmp.c
+//   POSIX:   cc -shared -fPIC -o bin/libfficmp.so examples/resources/fficmp.c
+// (tools/test builds it automatically when a C toolchain exists.)
+
+int lib = loadLib("bin/fficmp.dll")
+if lib == 0 {
+    lib = loadLib("bin/libfficmp.so")
+}
+var a = new int[4]
+a[0] = 3
+a[1] = 1
+a[2] = 2
+a[3] = 0
+print callInts(lib, "asum", a)
+print callIntsMut(lib, "ascale", a)
+print a[0]
+print a[1]
+print a[2]
+print a[3]
+print freeLib(lib)

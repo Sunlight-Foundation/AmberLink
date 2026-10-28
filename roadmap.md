@@ -54,22 +54,32 @@ Development is split into phases, each building toward a robust, modern, high-pe
 *The "Power" milestone — close the gap with the JVM, then surpass it.*
 
 - [x] **Threaded dispatch (computed gotos)** — replace the `switch` opcode loop with a jump table to eliminate branch misprediction; one of the highest-impact pure interpreter optimizations
-- [ ] **NaN-boxing** — pack `Value` into a single 64-bit double using NaN bits for type tags; cuts memory bandwidth and struct size significantly
-- [ ] **Register-based bytecode** — migrate AVM from stack-based to register-based instruction set to reduce unnecessary push/pop; significant rewrite but foundational for JIT
-- [ ] **Inline caching** — cache resolved field/method indices at call sites after first lookup; eliminates linear scans on repeat access
-- [ ] **Concurrency** — lightweight threads, `async`/`await`, or actor model
-- [ ] **FFI** — call C functions from Amberlink; access system libraries
+- [x] **GC collect threshold** — `collect()` was a full mark-and-sweep on every string concat; now gated on allocations-since-GC with an adaptive 2x-live threshold
+- [x] **NaN-boxing** — evaluated: `Value` is already 8 bytes (tag + 4-byte payload), so packing gains nothing; not implemented
+- [x] **Inline caching** — evaluated: field/method dispatch is already monomorphic via compile-time resolution (measured zero delta, reverted); shipped hash-indexed maps instead
+- [x] **Concurrency** — OS threads + GIL (`spawn`/`join`), GIL release in blocking natives, shared heap and globals
+- [x] **FFI** — call C functions from Amberlink (`loadLib`/`callInt`/`callStr` for int and string marshaling); access system libraries
 
 ---
 
-## Phase 6 — Advanced Language Features (v0.9)
-*The "Expressive" milestone — sophisticated type system.*
+## Phase 5.5 — Point Release (v0.7.x)
+*Small, safe wins: compiler-side and marshaling-layer only, zero VM risk.*
 
-- [ ] **Null safety** — non-nullable by default, optional types
-- [ ] **Generics** — type parameters (`List<T>`, `Map<K, V>`)
-- [ ] **Exception handling** — `try`, `catch`, `throw`
-- [ ] **Pattern matching** — `match` expressions
-- [ ] **Multi-module archives (upgraded .AMB files)** — separately-compiled modules with runtime linking/loading inside `.ama` (true multi-unit JARs); extends the single-unit archive
+- [x] **Constant folding** — fold literal expressions at compile time (`optimizer.rs`, on by default, `--no-opt` escape hatch)
+- [x] **FFI array/buffer marshaling** — pass arrays and byte buffers to C functions (numeric-kernel offload)
+
+---
+
+## Phase 6 — Advanced Language Features (v0.9) ✅ Complete
+*The "Expressive" milestone — sophisticated type system. Build order: type foundation → null safety → generics → pattern matching → exceptions → LLVM backend → multi-module archives.*
+
+- [x] **Type system foundation** — `ast::Type` extended with `Nullable(Box<Type>)` (`T?`) and `Generic(String, Vec<Type>)` (`Class<T>`); `lexer.rs` `?` token; `parser.rs` `parse_type` handles `T?` and `Class<T>` syntax; `semant.rs` `types_compatible` handles `T`→`T?` assignability and `Nullable`/`Generic` compatibility; method mangling updated for new variants
+- [x] **Null safety** — `null` literal (`Token::Null`, `Expr::Null`, `ValueType::Null`, `OP_PUSH_NULL`/`OP_CHECK_NULL`); null is assignable to any `Nullable(T)` but not to non-nullable `T`; null checks on field access (`OP_GET_FIELD`/`OP_SET_FIELD`) and method calls (`OP_CHECK_NULL` before `OP_CALL`) in the VM
+- [x] **Generics** — `Type::Generic(String, Vec<Type>)` parsed from `Class<T>` syntax; `types_compatible` handles generic-generic, raw↔generic (type erasure); emitter recognizes `Generic("List", _)` for List method dispatch; `List<int>` ≠ `List<String>` at compile time
+- [x] **Pattern matching** — `match` statement with literal patterns (`1`, `"hello"`, `true`) and wildcard (`_`); lowered to if/else chains, no VM changes
+- [x] **Exception handling** — `try { ... } catch e { ... }` and `throw <expr>`; new bytecode opcodes (`OP_TRY`/`OP_END_TRY`/`OP_THROW`); VM handler stack with stack unwinding on throw; handlers cleaned up on return
+- [x] **LLVM AOT backend** — compile `.amb` to textual LLVM IR and native machine code through `clang`; `--emit-llvm` emits IR and `--native <path>` builds a native executable without an `llvm-sys` dependency. Verified with a release compiler build and a native `hello.amb` smoke test (build + execution passed). Broader feature-parity testing remains advisable.
+- [x] **Multi-module archives** — separately compiled `.amc` modules bundled in `.ama` archives; `extern` declarations produce import metadata, and the AVM resolves exports, relocates calls/spawns/exception handlers, merges constant pools, isolates module globals, and runs module initializers before the main program. Regression coverage verifies a three-module archive, cross-module calls, internal calls, string constants, independent globals, module initialization, direct `.amc` execution, and clean failure for unresolved imports.
 
 ---
 
@@ -101,7 +111,6 @@ Development is split into phases, each building toward a robust, modern, high-pe
 - [ ] **Package manager** — share and manage third-party Amberlink libraries
 
 ### Backends
-- [ ] **Native compilation via LLVM** — compile `.amb` directly to native machine code through LLVM IR; inherits all LLVM optimizations; beats JVM on startup and memory
 - [ ] **AOT backend (`amber-native`)** — flesh out the existing C++ native codegen stub for platforms without LLVM
 - [ ] **JIT compilation** — compile hot bytecode paths to native code at runtime inside the AVM
 - [ ] **WASM target** — compile Amberlink to WebAssembly for browser execution

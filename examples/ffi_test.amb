@@ -1,0 +1,20 @@
+// ffi_test.amb
+// Exercises the FFI natives against the system C library.
+// Tries msvcrt.dll (Windows), then libc.so.6 (Linux), then libc.dylib (macOS).
+//   atoi("42") -> 42, strlen("hello") -> 5, div(7,2) -> 3 (quotient).
+
+int lib = loadLib("msvcrt.dll")
+if lib == 0 {
+    lib = loadLib("libc.so.6")
+}
+if lib == 0 {
+    lib = loadLib("libc.dylib")
+}
+print lib
+print callStr(lib, "atoi", "42")
+print callStr(lib, "strlen", "hello")
+print callInt(lib, "div", 7, 2)
+print loadLib("no-such-lib-xyz")
+print freeLib(999)
+print freeLib(lib)
+print freeLib(lib)

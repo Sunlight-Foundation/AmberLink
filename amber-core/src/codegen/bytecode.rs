@@ -51,6 +51,16 @@ pub enum OpCode {
     Call = 0x30,
     Return = 0x31,
     CallNative = 0x32,
+    Spawn = 0x33,
+
+    // --- Null Safety ---
+    PushNull = 0x70,  // Push a null value onto the stack
+    CheckNull = 0x71, // Abort if the top of stack is null (leaves it on the stack)
+
+    // --- Exception Handling ---
+    Try = 0x60,    // Push exception handler; operand: 4-byte catch address
+    EndTry = 0x61, // Pop exception handler
+    Throw = 0x62,  // Throw: pop exception value, unwind to handler, jump to catch
 
     // --- Utilities ---
     Pop = 0x80,
@@ -58,5 +68,7 @@ pub enum OpCode {
 }
 
 impl From<OpCode> for u8 {
-    fn from(op: OpCode) -> u8 { op as u8 }
+    fn from(op: OpCode) -> u8 {
+        op as u8
+    }
 }

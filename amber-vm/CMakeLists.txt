@@ -14,6 +14,7 @@ add_executable(avm
     src/natives.cpp
     src/resources.cpp
     src/roots.cpp
+    src/threads.cpp
 )
 
 # Sockets for the HTTP natives

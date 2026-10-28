@@ -1,0 +1,10 @@
+// bench/strcat.amb — string concat + constant-pool/GC pressure. Higher is worse.
+float t0 = clock()
+String s = ""
+int i = 0
+while i < 20000 {
+    s = s + "x"
+    i = i + 1
+}
+print strLen(s)
+print clock() - t0

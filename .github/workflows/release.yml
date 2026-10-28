@@ -1,0 +1,231 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, beta_development]
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    name: Resolve release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      build_number: ${{ steps.meta.outputs.build_number }}
+      channel: ${{ steps.meta.outputs.channel }}
+      tag: ${{ steps.meta.outputs.tag }}
+      title: ${{ steps.meta.outputs.title }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Calculate version and global build number
+        id: meta
+        shell: bash
+        run: |
+          sequence=$(jq -r '.release_sequence' .github/release-version.json)
+          patch=$(jq -r '.patch' .github/release-version.json)
+          year=$(date -u +%Y)
+          version="${year}.${sequence}.${patch}"
+          build_number="$GITHUB_RUN_NUMBER"
+
+          if [[ "$GITHUB_REF_NAME" == "beta_development" ]]; then
+            channel="beta"
+            tag="v${version}-beta.${build_number}"
+            title="AmberLink ${version}-beta.${build_number}"
+          else
+            channel="stable"
+            tag="v${version}+build.${build_number}"
+            title="AmberLink ${version} (Build ${build_number})"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Release metadata"
+            echo "- Version: `$version`"
+            echo "- Channel: `$channel`"
+            echo "- Global build: `$build_number`"
+            echo "- Tag: `$tag`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build and test (${{ matrix.os }})
+    needs: metadata
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+          - os: windows-latest
+            platform: windows-x64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: amber-core
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path amber-core/Cargo.toml --check
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path amber-core/Cargo.toml
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path amber-core/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Build Amber compiler
+        run: cargo build --release --manifest-path amber-core/Cargo.toml
+
+      - name: Configure AVM
+        run: cmake -S amber-vm -B build/amber-vm -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build AVM
+        run: cmake --build build/amber-vm --config Release --parallel
+
+      - name: Stage Windows toolchain
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force bin | Out-Null
+          Copy-Item amber-core/target/release/amber-core.exe bin/ambc.exe
+          $vm = Get-ChildItem build/amber-vm -Recurse -Filter avm.exe | Select-Object -First 1
+          if (-not $vm) { throw "AVM executable was not produced by CMake." }
+          Copy-Item $vm.FullName bin/avm.exe
+
+      - name: Stage Linux toolchain
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p bin
+          cp amber-core/target/release/amber-core bin/ambc
+          cp build/amber-vm/avm bin/avm
+
+      - name: Run Amberlink regression suite (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tools/test.ps1
+
+      - name: Run Amberlink regression suite (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tools/test.sh
+
+      - name: Install Clang
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Differential-test LLVM native backend
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tools/test-native.sh
+
+      - name: Package Windows release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          BUILD_NUMBER: ${{ needs.metadata.outputs.build_number }}
+          CHANNEL: ${{ needs.metadata.outputs.channel }}
+        run: |
+          $root = "dist/package"
+          New-Item -ItemType Directory -Force $root | Out-Null
+          New-Item -ItemType Directory -Force "$root/bin" | Out-Null
+          Copy-Item bin/ambc.exe, bin/avm.exe "$root/bin/"
+          Copy-Item stdlib "$root/stdlib" -Recurse
+          Copy-Item examples "$root/examples" -Recurse
+          Get-ChildItem "$root/examples" -Filter *.amc -Recurse | Remove-Item
+          Copy-Item LICENSE, README.md, LanguageGuide.md, Document.md "$root/"
+          @"
+          AmberLink version: $env:VERSION
+          Channel: $env:CHANNEL
+          Global build: $env:BUILD_NUMBER
+          Commit: $env:GITHUB_SHA
+          Branch: $env:GITHUB_REF_NAME
+          "@ | Set-Content "$root/BUILD-INFO.txt"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $archive = "dist/AmberLink-$env:VERSION-$env:CHANNEL-build-$env:BUILD_NUMBER-windows-x64.zip"
+          Compress-Archive -Path "$root/*" -DestinationPath $archive
+
+      - name: Package Linux release
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+          BUILD_NUMBER: ${{ needs.metadata.outputs.build_number }}
+          CHANNEL: ${{ needs.metadata.outputs.channel }}
+        run: |
+          root="dist/package"
+          mkdir -p "$root/bin" "$root/stdlib" "$root/examples" dist
+          cp bin/ambc bin/avm "$root/bin/"
+          cp -R stdlib/. "$root/stdlib/"
+          cp -R examples/. "$root/examples/"
+          find "$root/examples" -type f -name '*.amc' -delete
+          cp LICENSE README.md LanguageGuide.md Document.md "$root/"
+          {
+            echo "AmberLink version: $VERSION"
+            echo "Channel: $CHANNEL"
+            echo "Global build: $BUILD_NUMBER"
+            echo "Commit: $GITHUB_SHA"
+            echo "Branch: $GITHUB_REF_NAME"
+          } > "$root/BUILD-INFO.txt"
+          tar -czf "dist/AmberLink-$VERSION-$CHANNEL-build-$BUILD_NUMBER-linux-x64.tar.gz" -C "$root" .
+
+      - name: Upload release package
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist/AmberLink-*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: [metadata, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source for release publishing
+        uses: actions/checkout@v7
+
+      - name: Download platform packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: Publish or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          TITLE: ${{ needs.metadata.outputs.title }}
+          CHANNEL: ${{ needs.metadata.outputs.channel }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          elif [[ "$CHANNEL" == "beta" ]]; then
+            gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "$TITLE" --generate-notes --prerelease
+          else
+            gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "$TITLE" --generate-notes
+          fi

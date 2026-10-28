@@ -5,6 +5,7 @@
 #   make run file=X    - Compile and run (.amb), or run directly (.amc/.ama)
 #   make new name=X    - Scaffold a new project in directory X
 #   make test          - Compile + run every example (regression suite)
+#   make bench         - Run benchmarks (bench/*.amb, self-timed via clock())
 #   make watch file=X  - Rebuild and rerun on every *.amb change
 #   make clean         - Remove build artifacts
 
@@ -43,7 +44,7 @@ VM        := $(BIN_DIR)/avm$(EXE)
 # Rust binary name differs by platform
 RUST_BIN  := $(CORE_DIR)/target/release/amber-core$(EXE)
 
-.PHONY: init build run clean new test watch
+.PHONY: init build run clean new test bench watch
 
 init: $(COMPILER) $(VM)
 
@@ -94,6 +95,14 @@ ifdef IS_CMD
 	@powershell -NoProfile -ExecutionPolicy Bypass -File tools/test.ps1
 else
 	@bash tools/test.sh
+endif
+
+# Run benchmarks (each bench prints its result + elapsed seconds)
+bench: $(COMPILER) $(VM)
+ifdef IS_CMD
+	@powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1
+else
+	@bash tools/bench.sh
 endif
 
 # Rebuild and rerun whenever any *.amb changes

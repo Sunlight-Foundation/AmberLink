@@ -1,0 +1,30 @@
+// threads_test.amb
+// Exercises spawn/join. Workers compute into separate globals; the main
+// thread joins both before reading, so results are deterministic regardless
+// of scheduling.
+
+int fib(int n) {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+int g1 = 0
+int g2 = 0
+
+int w1() {
+    g1 = fib(20)
+    return g1
+}
+
+int w2() {
+    g2 = fib(22)
+    return g2
+}
+
+var h1 = spawn w1()
+var h2 = spawn w2()
+print join(h1)
+print join(h2)
+print g1 + g2

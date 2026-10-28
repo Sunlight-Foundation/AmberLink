@@ -1,0 +1,20 @@
+// stdlib/ffi.amb
+// FFI: call C functions in shared libraries (VM natives).
+// Only int, string, and int-array arguments are marshalled:
+//   loadLib(path) : int               — handle, or 0 on failure
+//   freeLib(handle) : bool            — true if a library was closed
+//   callInt(handle, symbol, a, b) : int   — calls int f(int, int)
+//   callStr(handle, symbol, s) : int      — calls int f(const char*)
+//   callInts(handle, symbol, arr) : int   — calls int f(int*, int), read-only
+//   callIntsMut(handle, symbol, arr) : int — same call, writes array back
+// A bad handle or missing symbol is a runtime error; calling with the
+// wrong C signature is undefined (as in C).
+
+int lib = loadLib("msvcrt.dll")
+if lib == 0 {
+    lib = loadLib("libc.so.6")
+}
+print callStr(lib, "atoi", "42")       // 42
+print callStr(lib, "strlen", "hello")  // 5
+print callInt(lib, "div", 7, 2)        // 3 (quotient)
+print freeLib(lib)                     // true
