@@ -56,6 +56,11 @@ pub enum IrInstr {
     ListSize,
     Pop,
     Print,
+    PushNull,
+    CheckNull,
+    Try { catch: usize },
+    EndTry,
+    Throw,
 }
 
 /// A decoded program: (byte offset, instruction) pairs in emission order.
@@ -173,6 +178,14 @@ pub fn decode(code: &[u8]) -> Result<IrProgram, String> {
             x if x == OpCode::ListSize as u8 => IrInstr::ListSize,
             x if x == OpCode::Pop as u8 => IrInstr::Pop,
             x if x == OpCode::Print as u8 => IrInstr::Print,
+            x if x == OpCode::PushNull as u8 => IrInstr::PushNull,
+            x if x == OpCode::CheckNull as u8 => IrInstr::CheckNull,
+            x if x == OpCode::Try as u8 => {
+                let catch = read_i32(code, &mut pos)? as usize;
+                IrInstr::Try { catch }
+            }
+            x if x == OpCode::EndTry as u8 => IrInstr::EndTry,
+            x if x == OpCode::Throw as u8 => IrInstr::Throw,
             other => return Err(format!("unknown opcode 0x{:02X} at offset {}", other, off)),
         };
         out.push((off, instr));
@@ -239,6 +252,14 @@ pub fn encode(prog: &IrProgram) -> Vec<u8> {
             IrInstr::ListSize => out.push(OpCode::ListSize.into()),
             IrInstr::Pop => out.push(OpCode::Pop.into()),
             IrInstr::Print => out.push(OpCode::Print.into()),
+            IrInstr::PushNull => out.push(OpCode::PushNull.into()),
+            IrInstr::CheckNull => out.push(OpCode::CheckNull.into()),
+            IrInstr::Try { catch } => {
+                out.push(OpCode::Try.into());
+                push_i32(&mut out, *catch as i32);
+            }
+            IrInstr::EndTry => out.push(OpCode::EndTry.into()),
+            IrInstr::Throw => out.push(OpCode::Throw.into()),
         }
     }
     out
@@ -292,6 +313,11 @@ pub fn format_instr(instr: &IrInstr, constants: &[String]) -> String {
         IrInstr::ListSize => "list_size".into(),
         IrInstr::Pop => "pop".into(),
         IrInstr::Print => "print".into(),
+        IrInstr::PushNull => "push_null".into(),
+        IrInstr::CheckNull => "check_null".into(),
+        IrInstr::Try { catch } => format!("try @{}", catch),
+        IrInstr::EndTry => "end_try".into(),
+        IrInstr::Throw => "throw".into(),
     }
 }
 
@@ -302,4 +328,29 @@ pub fn format_program(prog: &IrProgram, constants: &[String]) -> String {
         out.push_str(&format!("{:04}: {}\n", off, format_instr(instr, constants)));
     }
     out
+}
+
+/// Splits a serialized `.amc` ("AMBR") into its constant pool and raw code.
+pub fn split_amc(bytes: &[u8]) -> Result<(Vec<String>, Vec<u8>), String> {
+    if bytes.len() < 10 || &bytes[0..4] != b"AMBR" {
+        return Err("not an AMBR (.amc) image".to_string());
+    }
+    let mut pos = 4usize;
+    let _version = read_u16(bytes, &mut pos)?;
+    let _entry = read_i32(bytes, &mut pos)?;
+    let pool = read_i32(bytes, &mut pos)? as usize;
+    let mut constants = Vec::with_capacity(pool);
+    for _ in 0..pool {
+        let len = read_i32(bytes, &mut pos)? as usize;
+        if pos + len > bytes.len() {
+            return Err("truncated constant pool".to_string());
+        }
+        constants.push(String::from_utf8_lossy(&bytes[pos..pos + len]).into_owned());
+        pos += len;
+    }
+    let code_len = read_i32(bytes, &mut pos)? as usize;
+    if pos + code_len > bytes.len() {
+        return Err("truncated bytecode".to_string());
+    }
+    Ok((constants, bytes[pos..pos + code_len].to_vec()))
 }

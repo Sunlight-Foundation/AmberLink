@@ -97,6 +97,17 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
     std::vector<size_t> fp_stack;
     size_t fp = 0;
 
+    // Exception handler stack: each entry marks a TRY region's catch address,
+    // value-stack size, frame pointer, and stack depths so THROW can unwind.
+    struct Handler {
+        int32_t catch_addr;
+        size_t stack_size;
+        size_t fp;
+        size_t fp_stack_len;
+        size_t call_stack_len;
+    };
+    std::vector<Handler> handler_stack;
+
     // Reused across native calls (declared at function scope so computed-goto
     // dispatch never jumps across its construction/destruction).
     std::vector<Value> native_args;
@@ -153,6 +164,11 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             dispatch_table[OP_SPAWN]          = &&lbl_OP_SPAWN;
             dispatch_table[OP_POP]            = &&lbl_OP_POP;
             dispatch_table[OP_PRINT]          = &&lbl_OP_PRINT;
+            dispatch_table[OP_PUSH_NULL]      = &&lbl_OP_PUSH_NULL;
+            dispatch_table[OP_CHECK_NULL]     = &&lbl_OP_CHECK_NULL;
+            dispatch_table[OP_TRY]            = &&lbl_OP_TRY;
+            dispatch_table[OP_END_TRY]        = &&lbl_OP_END_TRY;
+            dispatch_table[OP_THROW]          = &&lbl_OP_THROW;
             table_init = true;
         }
 
@@ -384,6 +400,9 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             int32_t field_idx; std::memcpy(&field_idx, ip, 4); ip += 4;
             if (vm_stack.empty()) throw std::runtime_error("Stack underflow during GET_FIELD.");
             Value ref = vm_stack.back(); vm_stack.pop_back();
+            if (ref.type == ValueType::Null) {
+                throw std::runtime_error("Null pointer error: attempted to read a field on null.");
+            }
             if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
             InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[ref.as.obj_ref]);
             if (!obj) throw std::runtime_error("Reference is not an instance.");
@@ -396,6 +415,9 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during SET_FIELD.");
             Value val = vm_stack.back(); vm_stack.pop_back();
             Value ref = vm_stack.back(); vm_stack.pop_back();
+            if (ref.type == ValueType::Null) {
+                throw std::runtime_error("Null pointer error: attempted to write a field on null.");
+            }
             if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
             InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[ref.as.obj_ref]);
             if (!obj) throw std::runtime_error("Reference is not an instance.");
@@ -477,6 +499,11 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             vm_stack.push_back(result);
             ip = call_stack.back(); call_stack.pop_back();
             fp = fp_stack.back(); fp_stack.pop_back();
+            // Pop exception handlers that belonged to the returning frame: those
+            // registered at a deeper call depth than the caller we just resumed.
+            while (!handler_stack.empty() && handler_stack.back().call_stack_len > call_stack.size()) {
+                handler_stack.pop_back();
+            }
             DISPATCH();
         }
         lbl_OP_CALL_NATIVE: {
@@ -516,6 +543,52 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             if (vm_stack.empty()) throw std::runtime_error("Stack underflow during PRINT.");
             Value val = vm_stack.back(); vm_stack.pop_back();
             print_value(val, constants);
+            DISPATCH();
+        }
+        lbl_OP_PUSH_NULL: {
+            vm_stack.push_back(Value::make_null());
+            DISPATCH();
+        }
+        lbl_OP_CHECK_NULL: {
+            if (vm_stack.empty()) throw std::runtime_error("Stack underflow during CHECK_NULL.");
+            if (vm_stack.back().type == ValueType::Null) {
+                throw std::runtime_error("Null pointer error: attempted to access a member on null.");
+            }
+            DISPATCH();
+        }
+        lbl_OP_TRY: {
+            int32_t catch_addr; std::memcpy(&catch_addr, ip, 4); ip += 4;
+            handler_stack.push_back(Handler {
+                catch_addr,
+                vm_stack.size(),
+                fp,
+                fp_stack.size(),
+                call_stack.size(),
+            });
+            DISPATCH();
+        }
+        lbl_OP_END_TRY: {
+            if (handler_stack.empty()) throw std::runtime_error("END_TRY without matching TRY.");
+            handler_stack.pop_back();
+            DISPATCH();
+        }
+        lbl_OP_THROW: {
+            if (vm_stack.empty()) throw std::runtime_error("Stack underflow during THROW.");
+            Value exception = vm_stack.back(); vm_stack.pop_back();
+            if (handler_stack.empty()) {
+                throw std::runtime_error("Unhandled exception.");
+            }
+            auto handler = handler_stack.back();
+            handler_stack.pop_back();
+            // Unwind the value stack to the handler's mark, then push the exception.
+            vm_stack.resize(handler.stack_size);
+            vm_stack.push_back(exception);
+            // Restore frame pointer and unwind call/fp stacks.
+            fp = handler.fp;
+            fp_stack.resize(handler.fp_stack_len);
+            call_stack.resize(handler.call_stack_len);
+            // Jump to the catch address.
+            ip = vm.bytecode->data() + handler.catch_addr;
             DISPATCH();
         }
         lbl_UNKNOWN:
@@ -729,6 +802,9 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     int32_t field_idx; std::memcpy(&field_idx, ip, 4); ip += 4;
                     if (vm_stack.empty()) throw std::runtime_error("Stack underflow during GET_FIELD.");
                     Value ref = vm_stack.back(); vm_stack.pop_back();
+                    if (ref.type == ValueType::Null) {
+                        throw std::runtime_error("Null pointer error: attempted to read a field on null.");
+                    }
                     if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
                     InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[ref.as.obj_ref]);
                     if (!obj) throw std::runtime_error("Reference is not an instance.");
@@ -740,6 +816,9 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during SET_FIELD.");
                     Value val = vm_stack.back(); vm_stack.pop_back();
                     Value ref = vm_stack.back(); vm_stack.pop_back();
+                    if (ref.type == ValueType::Null) {
+                        throw std::runtime_error("Null pointer error: attempted to write a field on null.");
+                    }
                     if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
                     InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[ref.as.obj_ref]);
                     if (!obj) throw std::runtime_error("Reference is not an instance.");
@@ -812,7 +891,12 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     vm_stack.resize(fp);
                     vm_stack.push_back(result);
                     ip = call_stack.back(); call_stack.pop_back();
-                    fp = fp_stack.back(); fp_stack.pop_back(); break;
+                    fp = fp_stack.back(); fp_stack.pop_back();
+                    // Pop exception handlers that belonged to the returning frame.
+                    while (!handler_stack.empty() && handler_stack.back().call_stack_len > call_stack.size()) {
+                        handler_stack.pop_back();
+                    }
+                    break;
                 }
                 case OP_CALL_NATIVE: {
                     uint16_t native_id;
@@ -847,6 +931,45 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     Value val = vm_stack.back(); vm_stack.pop_back();
                     print_value(val, constants);
                     break;
+                }
+                case OP_PUSH_NULL: {
+                    vm_stack.push_back(Value::make_null()); break;
+                }
+                case OP_CHECK_NULL: {
+                    if (vm_stack.empty()) throw std::runtime_error("Stack underflow during CHECK_NULL.");
+                    if (vm_stack.back().type == ValueType::Null) {
+                        throw std::runtime_error("Null pointer error: attempted to access a member on null.");
+                    }
+                    break;
+                }
+                case OP_TRY: {
+                    int32_t catch_addr; std::memcpy(&catch_addr, ip, 4); ip += 4;
+                    handler_stack.push_back(Handler {
+                        catch_addr,
+                        vm_stack.size(),
+                        fp,
+                        fp_stack.size(),
+                        call_stack.size(),
+                    }); break;
+                }
+                case OP_END_TRY: {
+                    if (handler_stack.empty()) throw std::runtime_error("END_TRY without matching TRY.");
+                    handler_stack.pop_back(); break;
+                }
+                case OP_THROW: {
+                    if (vm_stack.empty()) throw std::runtime_error("Stack underflow during THROW.");
+                    Value exception = vm_stack.back(); vm_stack.pop_back();
+                    if (handler_stack.empty()) {
+                        throw std::runtime_error("Unhandled exception.");
+                    }
+                    auto handler = handler_stack.back();
+                    handler_stack.pop_back();
+                    vm_stack.resize(handler.stack_size);
+                    vm_stack.push_back(exception);
+                    fp = handler.fp;
+                    fp_stack.resize(handler.fp_stack_len);
+                    call_stack.resize(handler.call_stack_len);
+                    ip = vm.bytecode->data() + handler.catch_addr; break;
                 }
                 default:
                     throw std::runtime_error("Unknown opcode encountered.");

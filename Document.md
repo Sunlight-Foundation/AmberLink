@@ -1,4 +1,4 @@
-# 📄 Amberlink: Technical Specification (v0.7)
+# 📄 Amberlink: Technical Specification (v0.9)
 
 Amberlink is a high-performance, multi-paradigm programming language designed to bridge the gap between the safety of Java and the raw power of C++. It utilizes a unique Dual-Backend approach, allowing code to run either on a dedicated Virtual Machine (AVM) or as a native binary.
 
@@ -144,7 +144,7 @@ locking or GC rework), not this design. Rejected alternatives: no-GIL threads
 non-blocking rewrite of every native; un-Java-like), actors (alien paradigm for a
 Java alternative).
 
-### Proposed syntax (v1)
+### Syntax (v1)
 
 ```java
 var h1 = spawn fetch(url1)   // evaluates args now, runs fetch() on a new thread
@@ -207,19 +207,19 @@ handle, starts the thread at the address with the popped args, and pushes the
 handle. `join` is a blocking native on a handle table. Old programs never contain
 the new opcode; old VMs reject new programs with the existing unknown-opcode error.
 
-### Error semantics (proposed)
+### Error semantics
 
 - A thread that hits a runtime error records it on its handle and terminates.
 - `join` on a failed thread re-raises the error in the joining thread.
 - Joining an invalid/finished handle is a runtime error. `exit()` terminates the
   whole process immediately, as today.
 
-### Open questions (to settle before implementation)
+### Resolved implementation decisions
 
-1. `spawn` exact grammar: bare `spawn f(x)` vs `spawn(f, x)` form.
-2. Cap on live threads; behavior when exceeded (error vs block).
-3. Unhandled error with no joiner: process abort vs silent record.
-4. Whether `print` from multiple threads needs an output lock (yes, almost surely).
+- Syntax is `spawn f(x)`; `join` is a native.
+- There is no explicit thread cap in v1; the operating system sets the practical limit.
+- Thread failures are stored on their handles and re-raised by `join`. Unjoined threads are joined at program shutdown.
+- `print` and `printStr` share an output mutex.
 
 ### Implementation notes (decisions taken while building)
 
@@ -238,7 +238,7 @@ Goal: let numeric kernels live in C (the NumPy arrangement - slow glue language,
 fast kernels) by passing Amberlink arrays to C functions. Follows the v1 FFI
 (`loadLib`/`freeLib`/`callInt`/`callStr`); same fail-soft-where-sensible contract.
 
-### Proposed API
+### API
 
 ```java
 var a = new int[4]
@@ -281,19 +281,14 @@ print a[0]                         // sorted value visible
 Callbacks from C into Amberlink, structs, floats/doubles, 64-bit ints, returned
 pointers, `List` marshaling, resizing arrays from C.
 
-### Test strategy (required of the implementation PR)
+### Regression coverage
 
-System libc has no portable `int f(int*, int)` export, so unlike the v1 FFI
-(which tested against `atoi`/`strlen`) this needs a ~10-line C fixture compiled
-at test time where a C toolchain exists, skipped with a note where none does -
-the same pattern as the Python echo server for networking tests.
+System libc has no portable `int f(int*, int)` export. To exercise this path, use a small C fixture compiled at test time where a C toolchain is available; environments without one should skip the fixture with a note. This follows the Python echo-server pattern used for networking tests.
 
-### Open questions
+### Resolved implementation decisions
 
-1. Naming: `callInts`/`callIntsMut` vs a single `callBuf` that always copies back
-   (simpler surface, pays an O(n) copy for read-only kernels).
-2. Whether `char`/byte arrays deserve their own entry point or wait for a
-   proper bytes type.
+- Keep `callInts` and `callIntsMut` separate so read-only calls avoid the copy-back cost.
+- Defer `char`/byte-array marshaling until Amberlink has a dedicated bytes type; v1 marshals integer arrays only.
 
 ### Implementation notes (decisions taken while building)
 

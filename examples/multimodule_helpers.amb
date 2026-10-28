@@ -1,0 +1,7 @@
+extern int doubleIt(int x)
+int quadruple(int x) {
+    return doubleIt(doubleIt(x))
+}
+String moduleMessage() {
+    return "module-string-ok"
+}

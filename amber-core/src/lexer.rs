@@ -8,15 +8,19 @@ pub enum Token {
     If, Else, While, For,
     Public, Private, Protected,
     Static, Extends, Interface, Implements,
-    Import,
+    Import, Extern,
     Spawn,
+    Null,
+    Match,
+    Try, Catch, Throw,
+    QuestionMark,
     True, False,
     Identifier(String),
     Number(i64),
     FloatLit(String),
     CharLit(char),
     StringLit(String),
-    Equals, DoubleEquals, NotEquals, LessEquals, GreaterEquals, Plus, Minus, Star, Slash, Comma, Dot, LessThan, GreaterThan, Semicolon,
+    Equals, DoubleEquals, NotEquals, LessEquals, GreaterEquals, Plus, Minus, Star, Slash, Comma, Dot, LessThan, GreaterThan, Semicolon, Arrow,
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Newline,
     EOF,
@@ -63,6 +67,8 @@ impl Lexer {
                 '=' => {
                     if self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '=' {
                         self.push(&mut tokens, Token::DoubleEquals); self.pos += 2; self.column += 2;
+                    } else if self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '>' {
+                        self.push(&mut tokens, Token::Arrow); self.pos += 2; self.column += 2;
                     } else {
                         self.push(&mut tokens, Token::Equals); self.pos += 1; self.advance_col();
                     }
@@ -117,6 +123,7 @@ impl Lexer {
                 'a'..='z' | 'A'..='Z' | '_' => self.push_identifier(&mut tokens),
                 '0'..='9' => self.push_number(&mut tokens),
                 '"' => self.push_string(&mut tokens, errors),
+                '?' => { self.push(&mut tokens, Token::QuestionMark); self.pos += 1; self.advance_col(); }
                 _ => {
                     let (l, c) = self.current_line_column();
                     errors.push(crate::error::CompileError::new(l, c, format!("Unexpected character '{}'.", c)));
@@ -165,7 +172,13 @@ impl Lexer {
             "interface" => Token::Interface,
             "implements" => Token::Implements,
             "import" => Token::Import,
+            "extern" => Token::Extern,
             "spawn" => Token::Spawn,
+            "null" => Token::Null,
+            "match" => Token::Match,
+            "try" => Token::Try,
+            "catch" => Token::Catch,
+            "throw" => Token::Throw,
             _ => Token::Identifier(text),
         };
         self.push(tokens, token);

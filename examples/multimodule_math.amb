@@ -1,0 +1,4 @@
+int factor = 2
+int doubleIt(int x) {
+    return x * factor
+}

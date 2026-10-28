@@ -1,5 +1,5 @@
 // amber-core/src/semant.rs
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::ast::{Expr, Type, Op};
 
 pub struct FunctionInfo {
@@ -47,6 +47,9 @@ pub struct SymbolTable {
     pub classes: HashMap<String, ClassInfo>,
     pub interfaces: HashMap<String, InterfaceInfo>,
     pub natives: HashMap<String, NativeInfo>,
+    // Functions declared by separately-compiled modules (multi-module archives).
+    // Calls to these are left unresolved and recorded as link-time imports.
+    pub externs: HashSet<String>,
     pub variables: HashMap<String, u32>,
     pub locals: HashMap<String, u32>,
     pub variable_types: HashMap<String, crate::ast::Type>,
@@ -61,6 +64,7 @@ impl SymbolTable {
             classes: HashMap::new(),
             interfaces: HashMap::new(),
             natives: HashMap::new(),
+            externs: HashSet::new(),
             variables: HashMap::new(),
             locals: HashMap::new(),
             variable_types: HashMap::new(),
@@ -222,6 +226,7 @@ impl SymbolTable {
             }
             // spawn yields a thread-handle int; join() returns the worker's value.
             Expr::Spawn(_, _) => Some(Type::Int),
+            Expr::Null => Some(Type::Nullable(Box::new(Type::Unknown))), // null: assignable to any Nullable(T)
             Expr::Error => Some(Type::Unknown),
         }
     }
@@ -254,9 +259,45 @@ impl SymbolTable {
         if matches!(expected, Type::Float) && matches!(actual, Type::Int) { return true; }
         // Unknown matches anything; the real check is deferred.
         if matches!(expected, Type::Unknown) || matches!(actual, Type::Unknown) { return true; }
+        // null (Nullable(Unknown)) is assignable to any Nullable(T)
+        if let (Type::Nullable(_), Type::Nullable(inner)) = (expected, actual) {
+            if matches!(**inner, Type::Unknown) { return true; }
+        }
+        // T -> T?: a non-nullable value is assignable to a nullable variable
+        if let Type::Nullable(inner) = expected {
+            if **inner == *actual { return true; }
+        }
+        // Nullable(T1) -> Nullable(T2) if T1 -> T2
+        if let (Type::Nullable(inner1), Type::Nullable(inner2)) = (expected, actual) {
+            return self.types_compatible(inner1, inner2);
+        }
+        // T? cannot be assigned to non-nullable T
+        if matches!(actual, Type::Nullable(_)) && !matches!(expected, Type::Nullable(_)) {
+            return false;
+        }
+        // Raw type <-> generic: List is assignable to List<T> and vice versa (type erasure).
+        if let (Type::Class(expected_name), Type::Generic(name, _)) = (expected, actual) {
+            if name == expected_name { return true; }
+        }
+        if let (Type::Generic(name, _), Type::Class(actual_name)) = (expected, actual) {
+            if name == actual_name { return true; }
+        }
+        // Raw List <-> generic List<T> (List is its own variant, not Class("List")).
+        if let (Type::Generic(name, _), Type::List) = (expected, actual) {
+            if name == "List" { return true; }
+        }
+        if let (Type::List, Type::Generic(name, _)) = (expected, actual) {
+            if name == "List" { return true; }
+        }
         // Inheritance: a subclass instance satisfies a parent type.
         if let (Type::Class(exp), Type::Class(act)) = (expected, actual) {
             if self.is_subclass(act, exp) { return true; }
+        }
+        // Generics: same class name, compatible type arguments.
+        if let (Type::Generic(name1, args1), Type::Generic(name2, args2)) = (expected, actual) {
+            if name1 == name2 && args1.len() == args2.len() {
+                return args1.iter().zip(args2.iter()).all(|(a, b)| self.types_compatible(a, b));
+            }
         }
         false
     }

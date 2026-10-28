@@ -1,6 +1,6 @@
 // amber-core/src/codegen/emitter.rs
 use super::bytecode::OpCode;
-use crate::ast::{Expr, Op};
+use crate::ast::{Expr, Op, Pattern};
 use crate::ast::Stmt;
 use crate::error::{ErrorList, CompileError};
 use crate::semant::{SymbolTable, ClassInfo};
@@ -10,11 +10,19 @@ pub struct Emitter {
     pub code: Vec<u8>,
     pub constants: Vec<String>,
     pub calls_to_patch: Vec<(usize, String)>, // (Bytecode Index, Function Name)
+    pub try_patches: Vec<usize>,              // Bytecode Index of OP_TRY catch-addr placeholder
     pub current_class: Option<String>,
+    // Multi-module linking: calls to functions defined in other modules
+    // ((operand offset, function name)) and functions this module defines
+    // ((name, code address)). Serialized as the optional "AMLK" trailer.
+    pub imports: Vec<(usize, String)>,
+    pub exports: Vec<(String, u32)>,
+    // Only multi-module builds carry the trailer; plain programs stay byte-identical.
+    pub emit_link_info: bool,
 }
 
 impl Emitter {
-    pub fn new() -> Self { Self { code: Vec::new(), constants: Vec::new(), calls_to_patch: Vec::new(), current_class: None } }
+    pub fn new() -> Self { Self { code: Vec::new(), constants: Vec::new(), calls_to_patch: Vec::new(), try_patches: Vec::new(), current_class: None, imports: Vec::new(), exports: Vec::new(), emit_link_info: false } }
 
     pub fn emit_byte(&mut self, b: u8) { self.code.push(b); }
     pub fn emit_u16(&mut self, val: u16) {
@@ -65,6 +73,9 @@ impl Emitter {
             }
             Expr::Error => {
                 self.emit_error_fallback();
+            }
+            Expr::Null => {
+                self.emit_byte(OpCode::PushNull.into());
             }
             Expr::NewArray(size) => {
                 self.emit_expr(size, symbols, errors);
@@ -128,6 +139,12 @@ impl Emitter {
 
                 self.emit_expr(obj_expr, symbols, errors); // Push object ref
 
+                // Null check: abort at runtime if the receiver is null.
+                let receiver_ty = symbols.infer_type(obj_expr);
+                if matches!(receiver_ty, Some(crate::ast::Type::Nullable(_)) | Some(crate::ast::Type::Unknown)) {
+                    self.emit_byte(OpCode::CheckNull.into());
+                }
+
                 // Find field index across all classes.
                 let mut field_idx = None;
 
@@ -158,7 +175,11 @@ impl Emitter {
             Expr::MethodCall(obj, method_name, args) => {
                 // Intercept List built-in methods before class dispatch
                 let is_list_var = if let Expr::Variable(var_name) = &**obj {
-                    matches!(symbols.variable_types.get(var_name), Some(crate::ast::Type::List))
+                    match symbols.variable_types.get(var_name) {
+                        Some(crate::ast::Type::List) => true,
+                        Some(crate::ast::Type::Generic(name, _)) if name == "List" => true,
+                        _ => false
+                    }
                 } else { false };
 
                 if is_list_var {
@@ -200,6 +221,11 @@ impl Emitter {
 
                 if !is_static_call {
                     self.emit_expr(obj, symbols, errors); // 1. Push Object (this)
+                    // Null check: abort at runtime if the receiver is null.
+                    let receiver_ty = symbols.infer_type(obj);
+                    if matches!(receiver_ty, Some(crate::ast::Type::Nullable(_)) | Some(crate::ast::Type::Unknown)) {
+                        self.emit_byte(OpCode::CheckNull.into());
+                    }
                 }
 
                 for arg in args {
@@ -406,7 +432,22 @@ impl Emitter {
     }
 
     pub fn finalize(&mut self, symbols: &SymbolTable, errors: &mut ErrorList) {
+        // Everything this module defines is exported for other modules to link against.
+        let mut exports: Vec<(String, u32)> = symbols
+            .functions
+            .iter()
+            .filter(|(n, _)| !symbols.externs.contains(*n))
+            .map(|(n, f)| (n.clone(), f.address))
+            .collect();
+        exports.sort();
+        self.exports = exports;
+
         for (index, name) in &self.calls_to_patch {
+            // Defined in another module: leave the operand for the loader to patch.
+            if symbols.externs.contains(name) {
+                self.imports.push((*index, name.clone()));
+                continue;
+            }
             let func_info = match symbols.functions.get(name) {
                 Some(f) => f,
                 None => {
@@ -538,7 +579,12 @@ impl Emitter {
                 // Check if this is a void List operation (add/set) — these push nothing, skip POP.
                 let is_void_list_op = if let Expr::MethodCall(obj, method_name, args) = expr {
                     if let Expr::Variable(var_name) = &**obj {
-                        if matches!(symbols.variable_types.get(var_name), Some(crate::ast::Type::List)) {
+                        let is_list = match symbols.variable_types.get(var_name) {
+                            Some(crate::ast::Type::List) => true,
+                            Some(crate::ast::Type::Generic(name, _)) if name == "List" => true,
+                            _ => false
+                        };
+                        if is_list {
                             matches!(
                                 (method_name.as_str(), args.len()),
                                 ("add", 1) | ("set", 2)
@@ -723,9 +769,96 @@ impl Emitter {
             Stmt::Error => {
                 // Shouldn't reach emission with parse errors; nothing to emit.
             }
-            Stmt::Import(_) => {
-                // Imports are resolved by the compiler driver (main.rs) before
-                // emission and produce no bytecode of their own.
+            Stmt::Import(_) | Stmt::ExternFunction(_, _) => {
+                // Imports and external declarations are compile-time only.
+            }
+            Stmt::Match(subject, arms) => {
+                // Lower match to if/else chains: match s { p1 => b1; p2 => b2; _ => b3 }
+                // becomes if s == p1 { b1 } else if s == p2 { b2 } else { b3 }
+                let last_idx = arms.len().saturating_sub(1);
+                let mut end_jumps: Vec<usize> = Vec::new();
+
+                for (i, (pattern, body)) in arms.iter().enumerate() {
+                    let is_last = i == last_idx;
+                    let is_wildcard = matches!(pattern, Pattern::Wildcard);
+
+                    if !is_wildcard {
+                        // Emit subject == pattern comparison
+                        self.emit_expr(subject, symbols, errors);
+                        if let Pattern::Literal(lit) = pattern {
+                            self.emit_expr(lit, symbols, errors);
+                        }
+                        self.emit_byte(OpCode::Equal.into());
+
+                        let skip_jump = self.emit_jump(OpCode::JumpIfFalse.into());
+
+                        // Emit arm body
+                        for stmt in body {
+                            self.emit_stmt(stmt, symbols, errors);
+                        }
+
+                        if !is_last {
+                            let end_jump = self.emit_jump(OpCode::Jump.into());
+                            self.patch_jump(skip_jump);
+                            end_jumps.push(end_jump);
+                        } else {
+                            self.patch_jump(skip_jump);
+                        }
+                    } else {
+                        // Wildcard arm: emit body directly (the else branch).
+                        for stmt in body {
+                            self.emit_stmt(stmt, symbols, errors);
+                        }
+                    }
+                }
+
+                // Patch all end jumps to point here (after the match).
+                for end_jump in end_jumps {
+                    self.patch_jump(end_jump);
+                }
+            }
+            Stmt::Throw(expr) => {
+                self.emit_expr(expr, symbols, errors);
+                self.emit_byte(OpCode::Throw.into());
+            }
+            Stmt::Try(try_body, catch_var, catch_body) => {
+                // Emit OP_TRY with a 4-byte placeholder for the catch address.
+                self.emit_byte(OpCode::Try.into());
+                let try_patch_index = self.code.len();
+                self.code.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+                self.try_patches.push(try_patch_index);
+
+                // Emit try body.
+                self.emit_stmt(&*try_body, symbols, errors);
+
+                // Pop handler and jump over the catch block.
+                self.emit_byte(OpCode::EndTry.into());
+                let skip_catch = self.emit_jump(OpCode::Jump.into());
+
+                // Patch OP_TRY's catch address to point here (start of catch block).
+                let catch_addr = self.code.len() as i32;
+                let bytes = catch_addr.to_le_bytes();
+                for i in 0..4 {
+                    self.code[try_patch_index + i] = bytes[i];
+                }
+
+                // Catch block: exception value is on the stack. Store it in the
+                // catch variable (allocated as a local), then run the catch body.
+                let catch_idx = symbols.next_local_index;
+                symbols.locals.insert(catch_var.clone(), catch_idx);
+                symbols.next_local_index += 1;
+
+                self.emit_byte(OpCode::StoreLocal.into());
+                self.emit_int(catch_idx as i32);
+
+                self.emit_stmt(&*catch_body, symbols, errors);
+
+                // Patch the skip-catch jump to point here.
+                self.patch_jump(skip_catch);
+
+                // Remove catch variable from locals.
+                symbols.locals.remove(catch_var);
+                symbols.next_local_index = catch_idx;
             }
         }
     }
@@ -751,6 +884,27 @@ impl Emitter {
 
         out.extend_from_slice(&(self.code.len() as u32).to_le_bytes());
         out.extend_from_slice(&self.code);
+
+        // Optional link trailer (multi-module archives). Older loaders stop
+        // reading after the code, so single-module images are unchanged.
+        //   "AMLK"
+        //   export_count u32, then { name_len u32, name, address u32 }
+        //   import_count u32, then { name_len u32, name, operand_offset u32 }
+        if self.emit_link_info {
+            out.extend_from_slice(b"AMLK");
+            out.extend_from_slice(&(self.exports.len() as u32).to_le_bytes());
+            for (name, addr) in &self.exports {
+                out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                out.extend_from_slice(name.as_bytes());
+                out.extend_from_slice(&addr.to_le_bytes());
+            }
+            out.extend_from_slice(&(self.imports.len() as u32).to_le_bytes());
+            for (offset, name) in &self.imports {
+                out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                out.extend_from_slice(name.as_bytes());
+                out.extend_from_slice(&(*offset as u32).to_le_bytes());
+            }
+        }
         out
     }
 }

@@ -10,7 +10,8 @@ enum class ValueType {
     BOOL,
     CHAR,
     OBJ_REF,      // Index into Heap::objects
-    STRING_CONST  // Index into Constant Pool
+    STRING_CONST, // Index into Constant Pool
+    Null,         // null literal
 };
 
 struct Value {
@@ -30,6 +31,13 @@ struct Value {
     explicit Value(float v) : type(ValueType::FLOAT) { as.f = v; }
     explicit Value(bool v) : type(ValueType::BOOL) { as.b = v; }
     explicit Value(char v) : type(ValueType::CHAR) { as.c = v; }
+
+    static Value make_null() {
+        Value v;
+        v.type = ValueType::Null;
+        v.as.i = 0;
+        return v;
+    }
 
     // Static helpers
     static Value make_obj(int32_t idx) {
@@ -55,6 +63,7 @@ inline std::ostream& operator<<(std::ostream& os, const Value& v) {
         case ValueType::CHAR: os << "'" << v.as.c << "'"; break;
         case ValueType::OBJ_REF: os << "ObjRef(" << v.as.obj_ref << ")"; break;
         case ValueType::STRING_CONST: os << "StrConst(" << v.as.str_idx << ")"; break;
+        case ValueType::Null: os << "null"; break;
     }
     return os;
 }
