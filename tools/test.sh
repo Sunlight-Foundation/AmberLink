@@ -13,7 +13,7 @@ if [ ! -x "$AMBC" ] || [ ! -x "$AVM" ]; then
   exit 1
 fi
 
-EXAMPLES="factorial hello hi basic_types_test float_test list_test test_init test_methods test_oop test_overload test_static test_visibility gc_test native_test file_io_test collections_test import_test archive_test net_test ffi_test threads_test fold_test ffi_buf_test"
+EXAMPLES="factorial hello hi basic_types_test float_test list_test test_init test_methods test_oop test_overload test_static test_visibility gc_test native_test file_io_test collections_test import_test archive_test net_test ffi_test threads_test fold_test ffi_buf_test null_test match_test exception_test"
 STDLIB="stdlib/core.amb stdlib/io.amb stdlib/collections.amb stdlib/net.amb stdlib/ffi.amb"
 fail=0
 
@@ -53,6 +53,60 @@ done
 for s in $STDLIB; do
   if ! "$AMBC" "$s" --emit-ir >/dev/null 2>&1; then echo "$s : COMPILE FAIL"; fail=$((fail+1)); else echo "$s : OK"; fi
 done
+
+# Invalid source must fail compilation with a useful parser diagnostic.
+error_log=$(mktemp)
+if "$AMBC" examples/error_test.amb --emit-ir >"$error_log" 2>&1; then
+  echo "error_test : EXPECTED PARSE ERROR NOT REPORTED"
+  fail=$((fail+1))
+elif grep -q "Unexpected token" "$error_log"; then
+  echo "error_test : OK (invalid source rejected)"
+else
+  echo "error_test : EXPECTED PARSE DIAGNOSTIC MISSING"
+  cat "$error_log"
+  fail=$((fail+1))
+fi
+rm -f "$error_log"
+
+# Multi-module archive integration: link separately compiled modules and execute.
+archive_path=$(mktemp --suffix=.ama)
+if "$AMBC" examples/multimodule_main.amb \
+  --module examples/multimodule_math.amb \
+  --module examples/multimodule_helpers.amb \
+  --archive "$archive_path" >/dev/null 2>&1; then
+  archive_output=$("$AVM" "$archive_path" 2>&1)
+  archive_exit=$?
+  expected=$(printf '42\n84\n99\nmodule-string-ok')
+  if [ "$archive_exit" -ne 0 ] || [ "$archive_output" != "$expected" ]; then
+    echo "multimodule : RUN FAIL (exit=$archive_exit, output=$archive_output)"
+    fail=$((fail+1))
+  else
+    echo "multimodule : OK"
+  fi
+else
+  echo "multimodule : COMPILE/ARCHIVE FAIL"
+  fail=$((fail+1))
+fi
+
+# Missing imports must be rejected at archive load time.
+missing_archive=$(mktemp --suffix=.ama)
+if "$AMBC" examples/multimodule_main.amb \
+  --module examples/multimodule_missing.amb \
+  --module examples/multimodule_helpers.amb \
+  --archive "$missing_archive" >/dev/null 2>&1; then
+  missing_output=$("$AVM" "$missing_archive" 2>&1)
+  missing_exit=$?
+  if [ "$missing_exit" -eq 0 ] || ! printf '%s' "$missing_output" | grep -q "Unresolved external function"; then
+    echo "multimodule_missing : EXPECTED LINK ERROR NOT REPORTED"
+    fail=$((fail+1))
+  else
+    echo "multimodule_missing : OK (unresolved import rejected)"
+  fi
+else
+  echo "multimodule_missing : COMPILE/ARCHIVE FAIL"
+  fail=$((fail+1))
+fi
+rm -f "$archive_path" "$missing_archive"
 
 if [ -n "$server" ]; then kill "$server" 2>/dev/null; fi
 
