@@ -1,6 +1,8 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Visibility {
-    Public, Private, Protected
+    Public,
+    Private,
+    Protected,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,10 +34,10 @@ pub enum Type {
     String,
     Void,
     Class(String),
-    List, // New Type
-    Nullable(Box<Type>), // T? — optional type; a value of this type may be null
+    List,                       // New Type
+    Nullable(Box<Type>),        // T? — optional type; a value of this type may be null
     Generic(String, Vec<Type>), // Class<T, ...> — parameterized type
-    Unknown, // Unresolved type (error recovery / inference fallback)
+    Unknown,                    // Unresolved type (error recovery / inference fallback)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,8 +48,8 @@ pub enum Expr {
     Boolean(bool),
     StringLiteral(String),
     Variable(String),
-    NewArray(Box<Expr>), // Size
-    NewList, // New List
+    NewArray(Box<Expr>),            // Size
+    NewList,                        // New List
     ArrayAccess(String, Box<Expr>), // Name, Index
     Call(String, Vec<Expr>),
     Spawn(String, Vec<Expr>), // Function name, Args -> thread handle (int)
@@ -57,7 +59,7 @@ pub enum Expr {
     Binary(Box<Expr>, Op, Box<Expr>),
     // List Operations
     ListGet(Box<Expr>, Box<Expr>), // List Expr, Index
-    ListSize(Box<Expr>), // List Expr
+    ListSize(Box<Expr>),           // List Expr
     // Null literal — only assignable to Nullable(T) variables.
     Null,
     // Sentinel for a parse error; lets parsing continue past a bad expression.
@@ -65,6 +67,9 @@ pub enum Expr {
 }
 
 // Exception handling
+pub type FunctionParameter = (String, Type);
+pub type InterfaceMethodSignature = (String, Type, Vec<FunctionParameter>);
+
 #[derive(Debug, Clone)]
 pub enum Stmt {
     VarDecl(String, Option<Type>, Expr),
@@ -77,20 +82,29 @@ pub enum Stmt {
     While(Expr, Box<Stmt>),                 // Condition, Body
     Expression(Expr),
     Function(String, Vec<(String, Type)>, Vec<Stmt>, Visibility, bool), // Name, Params, Body, Visibility, is_static
-    Class(String, Option<String>, Vec<(String, Type, Visibility, bool)>, Vec<Stmt>, Vec<String>), // Name, Parent, Fields(name,type,vis,is_static), Methods, Implements
-    FieldSet(Box<Expr>, String, Expr), // Object, Field Name, Value
-    Interface(String, Vec<(String, Type, Vec<(String, Type)>)>), // Name, Method signatures (name, return_type, params)
+    Class(
+        String,
+        Option<String>,
+        Vec<(String, Type, Visibility, bool)>,
+        Vec<Stmt>,
+        Vec<String>,
+    ), // Name, Parent, Fields(name,type,vis,is_static), Methods, Implements
+    FieldSet(Box<Expr>, String, Expr),                                  // Object, Field Name, Value
+    Interface(String, Vec<InterfaceMethodSignature>), // Name, Method signatures (name, return_type, params)
     // Import a module file. Path is resolved by the compiler.
     Import(String),
-    ExternFunction(String, Vec<(String, Type)>),
+    #[allow(dead_code)]
+    ExternFunction(String, Vec<FunctionParameter>),
     // List Operations
+    #[allow(dead_code)]
     ListAdd(Box<Expr>, Expr), // List Expr, Value
+    #[allow(dead_code)]
     ListSet(Box<Expr>, Box<Expr>, Expr), // List Expr, Index, Value
     // Match statement: match <expr> { <pattern> => <stmts>, ... }
     Match(Box<Expr>, Vec<(Pattern, Vec<Stmt>)>),
     // Exception handling
-    Throw(Expr),                                    // throw <expr>
-    Try(Box<Stmt>, String, Box<Stmt>),              // try { ... } catch e { ... }
+    Throw(Expr),                       // throw <expr>
+    Try(Box<Stmt>, String, Box<Stmt>), // try { ... } catch e { ... }
     // Sentinel for a parse error; lets parsing continue past a bad statement.
     Error,
 }

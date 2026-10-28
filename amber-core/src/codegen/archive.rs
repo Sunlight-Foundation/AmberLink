@@ -62,12 +62,25 @@ pub fn build_archive(
     out
 }
 
-/// Convenience: builds a single-module archive (backward compatible).
-pub fn build_archive_single(main_bytecode: Vec<u8>, resources: Vec<(String, Vec<u8>)>) -> Vec<u8> {
-    build_archive(vec![(MAIN_ENTRY.to_string(), main_bytecode)], resources)
-}
+#[cfg(test)]
+mod tests {
+    use super::{build_archive, ARCHIVE_V1, ARCHIVE_V2};
 
-/// Returns true if an entry name looks like a compiled Amberlink module.
-pub fn is_module_entry(name: &str) -> bool {
-    name.ends_with(".amc") || name == MAIN_ENTRY
+    #[test]
+    fn single_module_archive_uses_v1_header() {
+        let bytes = build_archive(vec![("main".into(), vec![1, 2, 3])], vec![]);
+        assert_eq!(&bytes[..4], b"AMRA");
+        assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), ARCHIVE_V1);
+    }
+
+    #[test]
+    fn multiple_modules_use_v2_header_and_preserve_entries() {
+        let bytes = build_archive(
+            vec![("main".into(), vec![1]), ("math.amc".into(), vec![2])],
+            vec![("readme.txt".into(), vec![3])],
+        );
+        assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), ARCHIVE_V2);
+        assert_eq!(u32::from_le_bytes(bytes[6..10].try_into().unwrap()), 3);
+        assert!(bytes.windows(8).any(|window| window == b"math.amc"));
+    }
 }

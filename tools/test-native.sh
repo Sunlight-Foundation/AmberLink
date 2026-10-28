@@ -12,7 +12,7 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-for name in factorial hello hi float_test fold_test null_test match_test; do
+for name in basic_types_test factorial float_test fold_test hello hi match_test null_test test_static; do
   source="examples/$name.amb"
   bytecode="examples/$name.amc"
   native="$tmp/$name"

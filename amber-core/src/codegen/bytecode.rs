@@ -54,7 +54,7 @@ pub enum OpCode {
     Spawn = 0x33,
 
     // --- Null Safety ---
-    PushNull = 0x70, // Push a null value onto the stack
+    PushNull = 0x70,  // Push a null value onto the stack
     CheckNull = 0x71, // Abort if the top of stack is null (leaves it on the stack)
 
     // --- Exception Handling ---
@@ -68,5 +68,7 @@ pub enum OpCode {
 }
 
 impl From<OpCode> for u8 {
-    fn from(op: OpCode) -> u8 { op as u8 }
+    fn from(op: OpCode) -> u8 {
+        op as u8
+    }
 }

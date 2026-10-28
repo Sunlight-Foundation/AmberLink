@@ -13,7 +13,11 @@ pub struct CompileError {
 
 impl CompileError {
     pub fn new(line: usize, column: usize, message: impl Into<String>) -> Self {
-        Self { line, column, message: message.into() }
+        Self {
+            line,
+            column,
+            message: message.into(),
+        }
     }
 }
 
@@ -43,10 +47,6 @@ impl ErrorList {
 
     pub fn len(&self) -> usize {
         self.errors.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.errors.is_empty()
     }
 
     pub fn extend(&mut self, other: ErrorList) {
