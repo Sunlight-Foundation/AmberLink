@@ -56,6 +56,11 @@ pub enum IrInstr {
     ListSize,
     Pop,
     Print,
+    PushNull,
+    CheckNull,
+    Try { catch: usize },
+    EndTry,
+    Throw,
 }
 
 /// A decoded program: (byte offset, instruction) pairs in emission order.
@@ -173,6 +178,14 @@ pub fn decode(code: &[u8]) -> Result<IrProgram, String> {
             x if x == OpCode::ListSize as u8 => IrInstr::ListSize,
             x if x == OpCode::Pop as u8 => IrInstr::Pop,
             x if x == OpCode::Print as u8 => IrInstr::Print,
+            x if x == OpCode::PushNull as u8 => IrInstr::PushNull,
+            x if x == OpCode::CheckNull as u8 => IrInstr::CheckNull,
+            x if x == OpCode::Try as u8 => {
+                let catch = read_i32(code, &mut pos)? as usize;
+                IrInstr::Try { catch }
+            }
+            x if x == OpCode::EndTry as u8 => IrInstr::EndTry,
+            x if x == OpCode::Throw as u8 => IrInstr::Throw,
             other => return Err(format!("unknown opcode 0x{:02X} at offset {}", other, off)),
         };
         out.push((off, instr));
@@ -239,6 +252,14 @@ pub fn encode(prog: &IrProgram) -> Vec<u8> {
             IrInstr::ListSize => out.push(OpCode::ListSize.into()),
             IrInstr::Pop => out.push(OpCode::Pop.into()),
             IrInstr::Print => out.push(OpCode::Print.into()),
+            IrInstr::PushNull => out.push(OpCode::PushNull.into()),
+            IrInstr::CheckNull => out.push(OpCode::CheckNull.into()),
+            IrInstr::Try { catch } => {
+                out.push(OpCode::Try.into());
+                push_i32(&mut out, *catch as i32);
+            }
+            IrInstr::EndTry => out.push(OpCode::EndTry.into()),
+            IrInstr::Throw => out.push(OpCode::Throw.into()),
         }
     }
     out
@@ -292,6 +313,11 @@ pub fn format_instr(instr: &IrInstr, constants: &[String]) -> String {
         IrInstr::ListSize => "list_size".into(),
         IrInstr::Pop => "pop".into(),
         IrInstr::Print => "print".into(),
+        IrInstr::PushNull => "push_null".into(),
+        IrInstr::CheckNull => "check_null".into(),
+        IrInstr::Try { catch } => format!("try @{}", catch),
+        IrInstr::EndTry => "end_try".into(),
+        IrInstr::Throw => "throw".into(),
     }
 }
 

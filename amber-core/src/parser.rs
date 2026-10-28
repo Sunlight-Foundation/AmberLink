@@ -1,7 +1,7 @@
 // amber-core/src/parser.rs
 use crate::lexer::{Token, SpannedToken};
 use crate::semant::SymbolTable;
-use crate::ast::{Stmt, Expr, Op, Type};
+use crate::ast::{Stmt, Expr, Op, Pattern, Type};
 use crate::error::{ErrorList, CompileError};
 
 pub struct Parser {
@@ -90,7 +90,32 @@ impl Parser {
         match self.peek() {
             Token::Var => self.parse_declaration(None),
             Token::Int | Token::Void | Token::String | Token::Bool | Token::Float | Token::Char | Token::List => {
-                if matches!(self.peek_n(1), Token::Identifier(_)) && self.peek_n(2) == Token::LParen {
+                // Look past the type (which may include '?' nullable suffix and/or
+                // '<T>' generic arguments) to decide if this is a function
+                // declaration (`Type name(...)`) or a variable declaration
+                // (`Type name = ...`).
+                let mut lookahead = 1;
+                while self.peek_n(lookahead) == Token::QuestionMark {
+                    lookahead += 1;
+                }
+                if self.peek_n(lookahead) == Token::LessThan {
+                    lookahead += 1;
+                    let mut depth = 1i32;
+                    while depth > 0 && !matches!(self.peek_n(lookahead), Token::EOF) {
+                        match self.peek_n(lookahead) {
+                            Token::LessThan => depth += 1,
+                            Token::GreaterThan => depth -= 1,
+                            _ => {}
+                        }
+                        lookahead += 1;
+                    }
+                    while self.peek_n(lookahead) == Token::QuestionMark {
+                        lookahead += 1;
+                    }
+                }
+                let is_function = matches!(self.peek_n(lookahead), Token::Identifier(_))
+                    && self.peek_n(lookahead + 1) == Token::LParen;
+                if is_function {
                     self.parse_function(symbols)
                 } else {
                     let explicit_type = self.parse_type();
@@ -106,6 +131,9 @@ impl Parser {
             Token::Import => self.parse_import(),
             Token::Return => self.parse_return(),
             Token::Print => self.parse_print(),
+            Token::Match => self.parse_match(symbols),
+            Token::Try => self.parse_try(symbols),
+            Token::Throw => self.parse_throw(),
             Token::Identifier(_) => {
                 let expr = self.parse_expr();
 
@@ -157,7 +185,7 @@ impl Parser {
 
     fn parse_type(&mut self) -> Type {
         let tok = self.advance();
-        match tok {
+        let base_type = match &tok {
             Token::Int => Type::Int,
             Token::Float => Type::Float,
             Token::Bool => Type::Bool,
@@ -165,7 +193,7 @@ impl Parser {
             Token::String => Type::String,
             Token::Void => Type::Void,
             Token::List => Type::List,
-            Token::Identifier(name) => Type::Class(name),
+            Token::Identifier(name) => Type::Class(name.clone()),
             t => {
                 self.errors.push(CompileError::new(
                     self.tokens[self.pos.min(self.tokens.len() - 1)].line,
@@ -174,10 +202,88 @@ impl Parser {
                 ));
                 Type::Unknown
             }
+        };
+
+        // Generic type arguments: Class<T, ...>  (also handles List<T>)
+        let type_with_generics = if self.peek() == Token::LessThan {
+            self.advance(); // consume '<'
+            let mut type_args = Vec::new();
+            if self.peek() != Token::GreaterThan {
+                loop {
+                    type_args.push(self.parse_type());
+                    if self.peek() == Token::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            if self.peek() != Token::GreaterThan {
+                let (line, column) = if self.pos < self.tokens.len() {
+                    (self.tokens[self.pos].line, self.tokens[self.pos].column)
+                } else {
+                    (0, 0)
+                };
+                self.errors.push(CompileError::new(
+                    line, column,
+                    "Expected '>' after generic type arguments",
+                ));
+                // Panic-mode recovery: skip to the closing '>'
+                while !self.is_at_end() && self.peek() != Token::GreaterThan {
+                    self.advance();
+                }
+                if !self.is_at_end() {
+                    self.advance(); // consume '>'
+                }
+                return Type::Unknown;
+            }
+            self.advance(); // consume '>'
+
+            let class_name = match &tok {
+                Token::List => "List".to_string(),
+                Token::Identifier(name) => name.clone(),
+                _ => "unknown".to_string(),
+            };
+            Type::Generic(class_name, type_args)
+        } else {
+            base_type
+        };
+
+        // Nullable suffix: T?  (e.g. int?, List<int>?, MyClass?)
+        if self.peek() == Token::QuestionMark {
+            self.advance(); // consume '?'
+            return Type::Nullable(Box::new(type_with_generics));
         }
+
+        type_with_generics
     }
 
     // --- Expression Parsing (Recursive Descent) ---
+
+    fn parse_pattern(&mut self) -> Pattern {
+        let tok = self.advance();
+        match tok {
+            Token::Identifier(name) if name == "_" => Pattern::Wildcard,
+            Token::Number(val) => Pattern::Literal(Expr::Integer(val as i32)),
+            Token::FloatLit(val) => {
+                match val.parse() {
+                    Ok(f) => Pattern::Literal(Expr::Float(f)),
+                    Err(_) => {
+                        let _ = self.error_expr(format!("Invalid float literal '{}'.", val));
+                        Pattern::Wildcard
+                    }
+                }
+            }
+            Token::CharLit(val) => Pattern::Literal(Expr::Char(val)),
+            Token::StringLit(s) => Pattern::Literal(Expr::StringLiteral(s)),
+            Token::True => Pattern::Literal(Expr::Boolean(true)),
+            Token::False => Pattern::Literal(Expr::Boolean(false)),
+            t => {
+                let _ = self.error_expr(format!("Invalid match pattern: {:?}", t));
+                Pattern::Wildcard
+            }
+        }
+    }
 
     fn parse_expr(&mut self) -> Expr {
         self.parse_comparison()
@@ -288,6 +394,7 @@ impl Parser {
                 }
             }
             Token::StringLit(s) => Expr::StringLiteral(s),
+            Token::Null => Expr::Null,
             Token::Spawn => {
                 let name = match self.advance() {
                     Token::Identifier(n) => n,
@@ -471,13 +578,39 @@ impl Parser {
 
             if self.peek() == Token::Init {
                 methods.push(self.parse_constructor(symbols, &name, vis));
-            } else if matches!(self.peek_n(1), Token::Identifier(_)) && self.peek_n(2) == Token::LParen {
-                methods.push(self.parse_method(symbols, &name, vis, is_static));
             } else {
-                let field_type = self.parse_type();
-                let field_name = match self.advance() { Token::Identifier(n) => n, _ => return self.error_stmt("Expected field name") };
-                self.consume_semicolon();
-                fields.push((field_name, field_type, vis, is_static));
+                // Look past the type (nullable '?' and/or generics '<T>') to
+                // detect method declarations (`Type name(...)`) vs field
+                // declarations (`Type name;`).
+                let mut lookahead = 1;
+                while self.peek_n(lookahead) == Token::QuestionMark {
+                    lookahead += 1;
+                }
+                if self.peek_n(lookahead) == Token::LessThan {
+                    lookahead += 1;
+                    let mut depth = 1i32;
+                    while depth > 0 && !matches!(self.peek_n(lookahead), Token::EOF) {
+                        match self.peek_n(lookahead) {
+                            Token::LessThan => depth += 1,
+                            Token::GreaterThan => depth -= 1,
+                            _ => {}
+                        }
+                        lookahead += 1;
+                    }
+                    while self.peek_n(lookahead) == Token::QuestionMark {
+                        lookahead += 1;
+                    }
+                }
+                let is_method = matches!(self.peek_n(lookahead), Token::Identifier(_))
+                    && self.peek_n(lookahead + 1) == Token::LParen;
+                if is_method {
+                    methods.push(self.parse_method(symbols, &name, vis, is_static));
+                } else {
+                    let field_type = self.parse_type();
+                    let field_name = match self.advance() { Token::Identifier(n) => n, _ => return self.error_stmt("Expected field name") };
+                    self.consume_semicolon();
+                    fields.push((field_name, field_type, vis, is_static));
+                }
             }
         }
         if self.peek() != Token::RBrace { return self.error_stmt("Expected '}' after class body"); }
@@ -518,6 +651,8 @@ impl Parser {
                 Type::Void => "void",
                 Type::List => "List",
                 Type::Class(name) => name.as_str(),
+                Type::Nullable(_) => "opt",
+                Type::Generic(name, _) => name.as_str(),
                 Type::Unknown => "unknown",
             }))
             .collect::<Vec<_>>()
@@ -811,6 +946,96 @@ impl Parser {
         let expr = self.parse_expr();
         self.consume_semicolon();
         Stmt::Print(expr)
+    }
+
+    // Parses a match statement: match <expr> { <pattern> => <stmts>, ... }
+    // Each arm body is a sequence of statements, terminated by the next pattern
+    // or the closing '}'.
+    fn parse_match(&mut self, symbols: &mut SymbolTable) -> Stmt {
+        self.advance(); // consume 'match'
+        let subject = self.parse_expr();
+        if self.peek() != Token::LBrace {
+            return self.error_stmt("Expected '{' after match subject");
+        }
+        self.advance(); // consume '{'
+
+        let mut arms: Vec<(Pattern, Vec<Stmt>)> = Vec::new();
+        while !self.is_at_end() && self.peek() != Token::RBrace {
+            if self.peek() == Token::Newline { self.advance(); continue; }
+
+            let pattern = self.parse_pattern();
+            if self.peek() != Token::Arrow {
+                return self.error_stmt("Expected '=>' after match pattern");
+            }
+            self.advance(); // consume '=>'
+
+            // Parse arm body: statements until the next pattern or '}'.
+            let mut body = Vec::new();
+            while !self.is_at_end() && self.peek() != Token::RBrace {
+                if self.peek() == Token::Newline { self.advance(); continue; }
+                if self.is_pattern_start() { break; }
+                let before = self.errors.len();
+                let stmt = self.parse_statement(symbols);
+                if self.errors.len() > before {
+                    self.synchronize();
+                    break;
+                }
+                body.push(stmt);
+            }
+
+            arms.push((pattern, body));
+        }
+
+        if self.peek() != Token::RBrace {
+            return self.error_stmt("Expected '}' after match arms");
+        }
+        self.advance(); // consume '}'
+
+        Stmt::Match(Box::new(subject), arms)
+    }
+
+    // Returns true if the current token could start a match arm pattern.
+    fn is_pattern_start(&self) -> bool {
+        match self.peek() {
+            Token::Number(_) | Token::FloatLit(_) | Token::CharLit(_) | Token::StringLit(_)
+            | Token::True | Token::False => true,
+            Token::Identifier(name) => {
+                // '_' is always a wildcard pattern; any identifier followed by
+                // '=>' is a pattern arm start.
+                name == "_" || matches!(self.peek_n(1), Token::Arrow)
+            }
+            _ => false,
+        }
+    }
+
+    // Parses a throw statement: throw <expr>;
+    fn parse_throw(&mut self) -> Stmt {
+        self.advance(); // consume 'throw'
+        let expr = self.parse_expr();
+        self.consume_semicolon();
+        Stmt::Throw(expr)
+    }
+
+    // Parses a try/catch statement: try { ... } catch <name> { ... }
+    fn parse_try(&mut self, symbols: &mut SymbolTable) -> Stmt {
+        self.advance(); // consume 'try'
+        if self.peek() != Token::LBrace {
+            return self.error_stmt("Expected '{' after 'try'");
+        }
+        let try_body = self.parse_block(symbols);
+        if self.peek() != Token::Catch {
+            return self.error_stmt("Expected 'catch' after try block");
+        }
+        self.advance(); // consume 'catch'
+        let catch_var = match self.advance() {
+            Token::Identifier(name) => name,
+            t => return self.error_stmt(format!("Expected catch variable name, found {:?}", t)),
+        };
+        if self.peek() != Token::LBrace {
+            return self.error_stmt("Expected '{' after catch variable");
+        }
+        let catch_body = self.parse_block(symbols);
+        Stmt::Try(Box::new(try_body), catch_var, Box::new(catch_body))
     }
 
     fn peek(&self) -> Token { self.tokens[self.pos].token.clone() }

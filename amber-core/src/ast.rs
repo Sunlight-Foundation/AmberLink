@@ -3,7 +3,13 @@ pub enum Visibility {
     Public, Private, Protected
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    Literal(Expr), // int, float, string, bool, char literal
+    Wildcard,      // _ matches anything
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Op {
     Add,
     Sub,
@@ -27,10 +33,12 @@ pub enum Type {
     Void,
     Class(String),
     List, // New Type
+    Nullable(Box<Type>), // T? — optional type; a value of this type may be null
+    Generic(String, Vec<Type>), // Class<T, ...> — parameterized type
     Unknown, // Unresolved type (error recovery / inference fallback)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Integer(i32),
     Float(f64),
@@ -50,10 +58,13 @@ pub enum Expr {
     // List Operations
     ListGet(Box<Expr>, Box<Expr>), // List Expr, Index
     ListSize(Box<Expr>), // List Expr
+    // Null literal — only assignable to Nullable(T) variables.
+    Null,
     // Sentinel for a parse error; lets parsing continue past a bad expression.
     Error,
 }
 
+// Exception handling
 #[derive(Debug, Clone)]
 pub enum Stmt {
     VarDecl(String, Option<Type>, Expr),
@@ -74,6 +85,11 @@ pub enum Stmt {
     // List Operations
     ListAdd(Box<Expr>, Expr), // List Expr, Value
     ListSet(Box<Expr>, Box<Expr>, Expr), // List Expr, Index, Value
+    // Match statement: match <expr> { <pattern> => <stmts>, ... }
+    Match(Box<Expr>, Vec<(Pattern, Vec<Stmt>)>),
+    // Exception handling
+    Throw(Expr),                                    // throw <expr>
+    Try(Box<Stmt>, String, Box<Stmt>),              // try { ... } catch e { ... }
     // Sentinel for a parse error; lets parsing continue past a bad statement.
     Error,
 }

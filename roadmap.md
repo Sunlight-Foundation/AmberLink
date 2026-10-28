@@ -70,15 +70,16 @@ Development is split into phases, each building toward a robust, modern, high-pe
 
 ---
 
-## Phase 6 — Advanced Language Features (v0.9)
-*The "Expressive" milestone — sophisticated type system.*
+## Phase 6 — Advanced Language Features (v0.9) 🚧 In Progress
+*The "Expressive" milestone — sophisticated type system. Build order: type foundation → null safety → generics → pattern matching → exceptions → LLVM backend → multi-module archives.*
 
-- [ ] **LLVM AOT backend** — compile `.amb` to native machine code through LLVM IR (headline: AVM for iteration, LLVM for release builds; makes a register VM unnecessary via `mem2reg`)
-- [ ] **Null safety** — non-nullable by default, optional types
-- [ ] **Generics** — type parameters (`List<T>`, `Map<K, V>`)
-- [ ] **Exception handling** — `try`, `catch`, `throw`
-- [ ] **Pattern matching** — `match` expressions
-- [ ] **Multi-module archives (upgraded .AMB files)** — separately-compiled modules with runtime linking/loading inside `.ama` (true multi-unit JARs); extends the single-unit archive
+- [x] **Type system foundation** — `ast::Type` extended with `Nullable(Box<Type>)` (`T?`) and `Generic(String, Vec<Type>)` (`Class<T>`); `lexer.rs` `?` token; `parser.rs` `parse_type` handles `T?` and `Class<T>` syntax; `semant.rs` `types_compatible` handles `T`→`T?` assignability and `Nullable`/`Generic` compatibility; method mangling updated for new variants
+- [x] **Null safety** — `null` literal (`Token::Null`, `Expr::Null`, `ValueType::Null`, `OP_PUSH_NULL`/`OP_CHECK_NULL`); null is assignable to any `Nullable(T)` but not to non-nullable `T`; null checks on field access (`OP_GET_FIELD`/`OP_SET_FIELD`) and method calls (`OP_CHECK_NULL` before `OP_CALL`) in the VM
+- [x] **Generics** — `Type::Generic(String, Vec<Type>)` parsed from `Class<T>` syntax; `types_compatible` handles generic-generic, raw↔generic (type erasure); emitter recognizes `Generic("List", _)` for List method dispatch; `List<int>` ≠ `List<String>` at compile time
+- [x] **Pattern matching** — `match` statement with literal patterns (`1`, `"hello"`, `true`) and wildcard (`_`); lowered to if/else chains, no VM changes
+- [x] **Exception handling** — `try { ... } catch e { ... }` and `throw <expr>`; new bytecode opcodes (`OP_TRY`/`OP_END_TRY`/`OP_THROW`); VM handler stack with stack unwinding on throw; handlers cleaned up on return
+- [ ] **LLVM AOT backend** — compile `.amb` to native machine code through LLVM IR (requires `llvm-sys` dependency; large undertaking)
+- [ ] **Multi-module archives** — separately-compiled modules with runtime linking/loading inside `.ama` (requires `.ama` format and VM loader changes)
 
 ---
 
