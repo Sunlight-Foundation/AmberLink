@@ -1072,23 +1072,4 @@ impl Emitter {
         }
         out
     }
-
-    // Serializes the compiled program to the .amc binary format in memory.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out: Vec<u8> = Vec::new();
-        out.extend_from_slice(b"AMBR"); // Magic
-        out.extend_from_slice(&1u16.to_le_bytes()); // Version
-        out.extend_from_slice(&0u32.to_le_bytes()); // Entry point placeholder
-
-        // Write Constant Pool
-        out.extend_from_slice(&(self.constants.len() as u32).to_le_bytes());
-        for s in &self.constants {
-            out.extend_from_slice(&(s.len() as u32).to_le_bytes());
-            out.extend_from_slice(s.as_bytes());
-        }
-
-        out.extend_from_slice(&(self.code.len() as u32).to_le_bytes());
-        out.extend_from_slice(&self.code);
-        out
-    }
 }
