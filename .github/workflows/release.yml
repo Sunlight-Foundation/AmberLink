@@ -208,6 +208,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out source for release publishing
+        uses: actions/checkout@v7
+
       - name: Download platform packages
         uses: actions/download-artifact@v8
         with:
