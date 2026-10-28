@@ -141,13 +141,73 @@ fn compile_file(
         return Err(emit_errors);
     }
 
-    Ok((emitter.code.clone(), ordered_paths))
+    Ok((emitter.to_bytes(), ordered_paths))
+}
+
+/// Runtime support linked into every native build (see runtime/amb_rt.c).
+const AMB_RUNTIME_C: &str = include_str!("../runtime/amb_rt.c");
+
+/// Lowers a compiled `.amc` image to LLVM IR text, exiting with diagnostics on failure.
+fn lower_to_llvm(amc: &[u8]) -> String {
+    let (consts, code) = match codegen::ir::split_amc(amc) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error: could not read compiled image: {}", e);
+            process::exit(1);
+        }
+    };
+    let prog = match codegen::ir::decode(&code) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: could not decode IR for LLVM emission: {}", e);
+            process::exit(1);
+        }
+    };
+    match codegen::llvm_backend::emit_llvm(&prog, &consts) {
+        Ok(ll) => ll,
+        Err(errs) => {
+            for e in errs {
+                eprintln!("LLVM backend error: {}", e);
+            }
+            process::exit(1);
+        }
+    }
+}
+
+/// Builds a native executable from LLVM IR by invoking `clang` (must be on PATH).
+fn build_native(ll: &str, exe: &str) {
+    let dir = env::temp_dir().join(format!("amberlink-native-{}", process::id()));
+    fs::create_dir_all(&dir).expect("Failed to create temp dir");
+    let ll_path = dir.join("program.ll");
+    let rt_path = dir.join("amb_rt.c");
+    fs::write(&ll_path, ll).expect("Failed to write LLVM IR");
+    fs::write(&rt_path, AMB_RUNTIME_C).expect("Failed to write runtime");
+    let status = process::Command::new("clang")
+        .arg("-O2")
+        .arg("-Wno-override-module")
+        .arg(&ll_path)
+        .arg(&rt_path)
+        .arg("-o")
+        .arg(exe)
+        .status();
+    let _ = fs::remove_dir_all(&dir);
+    match status {
+        Ok(s) if s.success() => println!("Amberlink: Built native executable {}", exe),
+        Ok(s) => {
+            eprintln!("Error: clang exited with {}", s);
+            process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error: could not run clang ({}). Install LLVM/clang and put it on PATH.", e);
+            process::exit(1);
+        }
+    }
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: ambc <file.amb> [--module mod.amb]... [--archive out.ama] [--resource name=path]... [--emit-ir] [--emit-llvm] [--no-opt]");
+        eprintln!("Usage: ambc <file.amb> [--module mod.amb]... [--archive out.ama] [--resource name=path]... [--emit-ir] [--emit-llvm] [--native out] [--no-opt]");
         process::exit(1);
     }
 
@@ -161,6 +221,7 @@ fn main() {
     let mut extra_modules: Vec<String> = Vec::new();
     let mut emit_ir = false;
     let mut emit_llvm = false;
+    let mut native_out: Option<String> = None;
     let mut no_opt = false;
     let mut i = 2;
     while i < args.len() {
@@ -210,6 +271,14 @@ fn main() {
             "--emit-llvm" => {
                 emit_llvm = true;
                 i += 1;
+            }
+            "--native" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Error: --native requires an output path");
+                    process::exit(1);
+                }
+                native_out = Some(args[i + 1].clone());
+                i += 2;
             }
             "--no-opt" => {
                 no_opt = true;
@@ -270,14 +339,21 @@ fn main() {
 
     // If requested, dump the backend IR and verify the decode/re-encode round-trip.
     if emit_ir {
-        match codegen::ir::decode(&module_entries[0].1) {
+        let (consts, code) = match codegen::ir::split_amc(&module_entries[0].1) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Error: could not read compiled image: {}", e);
+                process::exit(1);
+            }
+        };
+        match codegen::ir::decode(&code) {
             Ok(prog) => {
                 let back = codegen::ir::encode(&prog);
-                if back != module_entries[0].1 {
+                if back != code {
                     eprintln!("Error: IR round-trip mismatch (decoder drift)");
                     process::exit(1);
                 }
-                print!("{}", codegen::ir::format_program(&prog, &[]));
+                print!("{}", codegen::ir::format_program(&prog, &consts));
             }
             Err(e) => {
                 eprintln!("Error: could not decode IR: {}", e);
@@ -287,15 +363,13 @@ fn main() {
     }
 
     // If requested, emit LLVM IR for the compiled program (textual IR; no LLVM install needed).
-    if emit_llvm {
-        match codegen::ir::decode(&module_entries[0].1) {
-            Ok(prog) => {
-                println!("{}", codegen::llvm_backend::emit_llvm(&prog, &[]));
-            }
-            Err(e) => {
-                eprintln!("Error: could not decode IR for LLVM emission: {}", e);
-                process::exit(1);
-            }
+    if emit_llvm || native_out.is_some() {
+        let ll = lower_to_llvm(&module_entries[0].1);
+        if emit_llvm {
+            print!("{}", ll);
+        }
+        if let Some(exe) = &native_out {
+            build_native(&ll, exe);
         }
     }
 

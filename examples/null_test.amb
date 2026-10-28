@@ -1,0 +1,8 @@
+// null_test.amb - nullable types
+String? name = null
+print "declared"
+name = "Amber"
+print name
+int? n = null
+n = 5
+print n

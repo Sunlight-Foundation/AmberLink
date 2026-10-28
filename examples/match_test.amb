@@ -1,0 +1,17 @@
+// match_test.amb - literal and wildcard patterns
+int x = 2
+match x {
+    1 => { print "one" }
+    2 => { print "two" }
+    _ => { print "other" }
+}
+String s = "hello"
+match s {
+    "hi" => { print "greeting-short" }
+    "hello" => { print "greeting-long" }
+    _ => { print "unknown" }
+}
+match 99 {
+    1 => { print "one" }
+    _ => { print "fallback" }
+}

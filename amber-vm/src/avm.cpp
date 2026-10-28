@@ -499,8 +499,9 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             vm_stack.push_back(result);
             ip = call_stack.back(); call_stack.pop_back();
             fp = fp_stack.back(); fp_stack.pop_back();
-            // Pop exception handlers that belonged to the returning frame.
-            while (!handler_stack.empty() && handler_stack.back().fp >= fp) {
+            // Pop exception handlers that belonged to the returning frame: those
+            // registered at a deeper call depth than the caller we just resumed.
+            while (!handler_stack.empty() && handler_stack.back().call_stack_len > call_stack.size()) {
                 handler_stack.pop_back();
             }
             DISPATCH();
@@ -559,10 +560,10 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             int32_t catch_addr; std::memcpy(&catch_addr, ip, 4); ip += 4;
             handler_stack.push_back(Handler {
                 catch_addr,
-                stack_size: vm_stack.size(),
+                vm_stack.size(),
                 fp,
-                fp_stack_len: fp_stack.size(),
-                call_stack_len: call_stack.size(),
+                fp_stack.size(),
+                call_stack.size(),
             });
             DISPATCH();
         }
@@ -892,7 +893,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     ip = call_stack.back(); call_stack.pop_back();
                     fp = fp_stack.back(); fp_stack.pop_back();
                     // Pop exception handlers that belonged to the returning frame.
-                    while (!handler_stack.empty() && handler_stack.back().fp >= fp) {
+                    while (!handler_stack.empty() && handler_stack.back().call_stack_len > call_stack.size()) {
                         handler_stack.pop_back();
                     }
                     break;
@@ -945,10 +946,10 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     int32_t catch_addr; std::memcpy(&catch_addr, ip, 4); ip += 4;
                     handler_stack.push_back(Handler {
                         catch_addr,
-                        stack_size: vm_stack.size(),
+                        vm_stack.size(),
                         fp,
-                        fp_stack_len: fp_stack.size(),
-                        call_stack_len: call_stack.size(),
+                        fp_stack.size(),
+                        call_stack.size(),
                     }); break;
                 }
                 case OP_END_TRY: {

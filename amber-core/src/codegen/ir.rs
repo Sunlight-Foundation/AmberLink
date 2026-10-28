@@ -329,3 +329,28 @@ pub fn format_program(prog: &IrProgram, constants: &[String]) -> String {
     }
     out
 }
+
+/// Splits a serialized `.amc` ("AMBR") into its constant pool and raw code.
+pub fn split_amc(bytes: &[u8]) -> Result<(Vec<String>, Vec<u8>), String> {
+    if bytes.len() < 10 || &bytes[0..4] != b"AMBR" {
+        return Err("not an AMBR (.amc) image".to_string());
+    }
+    let mut pos = 4usize;
+    let _version = read_u16(bytes, &mut pos)?;
+    let _entry = read_i32(bytes, &mut pos)?;
+    let pool = read_i32(bytes, &mut pos)? as usize;
+    let mut constants = Vec::with_capacity(pool);
+    for _ in 0..pool {
+        let len = read_i32(bytes, &mut pos)? as usize;
+        if pos + len > bytes.len() {
+            return Err("truncated constant pool".to_string());
+        }
+        constants.push(String::from_utf8_lossy(&bytes[pos..pos + len]).into_owned());
+        pos += len;
+    }
+    let code_len = read_i32(bytes, &mut pos)? as usize;
+    if pos + code_len > bytes.len() {
+        return Err("truncated bytecode".to_string());
+    }
+    Ok((constants, bytes[pos..pos + code_len].to_vec()))
+}
