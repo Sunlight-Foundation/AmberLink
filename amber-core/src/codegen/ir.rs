@@ -109,11 +109,15 @@ pub fn decode(code: &[u8]) -> Result<IrProgram, String> {
             x if x == OpCode::Halt as u8 => IrInstr::Halt,
             x if x == OpCode::Jump as u8 => {
                 let rel = read_i32(code, &mut pos)?;
-                IrInstr::Jump { target: (pos as i32 + rel) as usize }
+                IrInstr::Jump {
+                    target: (pos as i32 + rel) as usize,
+                }
             }
             x if x == OpCode::JumpIfFalse as u8 => {
                 let rel = read_i32(code, &mut pos)?;
-                IrInstr::JumpIfFalse { target: (pos as i32 + rel) as usize }
+                IrInstr::JumpIfFalse {
+                    target: (pos as i32 + rel) as usize,
+                }
             }
             x if x == OpCode::Push as u8 => IrInstr::Push(read_i32(code, &mut pos)?),
             x if x == OpCode::StoreGlobal as u8 => IrInstr::StoreGlobal(read_i32(code, &mut pos)?),
@@ -167,7 +171,10 @@ pub fn decode(code: &[u8]) -> Result<IrProgram, String> {
             x if x == OpCode::NewInstance as u8 => {
                 let name_idx = read_i32(code, &mut pos)?;
                 let field_count = read_i32(code, &mut pos)?;
-                IrInstr::NewInstance { name_idx, field_count }
+                IrInstr::NewInstance {
+                    name_idx,
+                    field_count,
+                }
             }
             x if x == OpCode::GetField as u8 => IrInstr::GetField(read_i32(code, &mut pos)?),
             x if x == OpCode::SetField as u8 => IrInstr::SetField(read_i32(code, &mut pos)?),
@@ -212,18 +219,45 @@ pub fn encode(prog: &IrProgram) -> Vec<u8> {
                 out.push(OpCode::JumpIfFalse.into());
                 push_i32(&mut out, *target as i32 - (*off + 5) as i32);
             }
-            IrInstr::Push(v) => { out.push(OpCode::Push.into()); push_i32(&mut out, *v); }
-            IrInstr::StoreGlobal(v) => { out.push(OpCode::StoreGlobal.into()); push_i32(&mut out, *v); }
-            IrInstr::LoadGlobal(v) => { out.push(OpCode::LoadGlobal.into()); push_i32(&mut out, *v); }
-            IrInstr::StoreLocal(v) => { out.push(OpCode::StoreLocal.into()); push_i32(&mut out, *v); }
-            IrInstr::LoadLocal(v) => { out.push(OpCode::LoadLocal.into()); push_i32(&mut out, *v); }
-            IrInstr::LoadConst(v) => { out.push(OpCode::LoadConst.into()); push_i32(&mut out, *v); }
+            IrInstr::Push(v) => {
+                out.push(OpCode::Push.into());
+                push_i32(&mut out, *v);
+            }
+            IrInstr::StoreGlobal(v) => {
+                out.push(OpCode::StoreGlobal.into());
+                push_i32(&mut out, *v);
+            }
+            IrInstr::LoadGlobal(v) => {
+                out.push(OpCode::LoadGlobal.into());
+                push_i32(&mut out, *v);
+            }
+            IrInstr::StoreLocal(v) => {
+                out.push(OpCode::StoreLocal.into());
+                push_i32(&mut out, *v);
+            }
+            IrInstr::LoadLocal(v) => {
+                out.push(OpCode::LoadLocal.into());
+                push_i32(&mut out, *v);
+            }
+            IrInstr::LoadConst(v) => {
+                out.push(OpCode::LoadConst.into());
+                push_i32(&mut out, *v);
+            }
             IrInstr::NewArray => out.push(OpCode::NewArray.into()),
             IrInstr::StoreArray => out.push(OpCode::StoreArray.into()),
             IrInstr::LoadArray => out.push(OpCode::LoadArray.into()),
-            IrInstr::PushFloat(v) => { out.push(OpCode::PushFloat.into()); out.extend_from_slice(&v.to_le_bytes()); }
-            IrInstr::PushBool(v) => { out.push(OpCode::PushBool.into()); out.push(u8::from(*v)); }
-            IrInstr::PushChar(v) => { out.push(OpCode::PushChar.into()); push_i32(&mut out, *v); }
+            IrInstr::PushFloat(v) => {
+                out.push(OpCode::PushFloat.into());
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+            IrInstr::PushBool(v) => {
+                out.push(OpCode::PushBool.into());
+                out.push(u8::from(*v));
+            }
+            IrInstr::PushChar(v) => {
+                out.push(OpCode::PushChar.into());
+                push_i32(&mut out, *v);
+            }
             IrInstr::Add => out.push(OpCode::Add.into()),
             IrInstr::Sub => out.push(OpCode::Sub.into()),
             IrInstr::Mul => out.push(OpCode::Mul.into()),
@@ -234,17 +268,37 @@ pub fn encode(prog: &IrProgram) -> Vec<u8> {
             IrInstr::NotEqual => out.push(OpCode::NotEqual.into()),
             IrInstr::LessEqual => out.push(OpCode::LessEqual.into()),
             IrInstr::GreaterEqual => out.push(OpCode::GreaterEqual.into()),
-            IrInstr::Call { addr, argc } => { out.push(OpCode::Call.into()); push_i32(&mut out, *addr); out.push(*argc); }
-            IrInstr::Spawn { addr, argc } => { out.push(OpCode::Spawn.into()); push_i32(&mut out, *addr); out.push(*argc); }
+            IrInstr::Call { addr, argc } => {
+                out.push(OpCode::Call.into());
+                push_i32(&mut out, *addr);
+                out.push(*argc);
+            }
+            IrInstr::Spawn { addr, argc } => {
+                out.push(OpCode::Spawn.into());
+                push_i32(&mut out, *addr);
+                out.push(*argc);
+            }
             IrInstr::Return => out.push(OpCode::Return.into()),
-            IrInstr::CallNative(id) => { out.push(OpCode::CallNative.into()); out.extend_from_slice(&id.to_le_bytes()); }
-            IrInstr::NewInstance { name_idx, field_count } => {
+            IrInstr::CallNative(id) => {
+                out.push(OpCode::CallNative.into());
+                out.extend_from_slice(&id.to_le_bytes());
+            }
+            IrInstr::NewInstance {
+                name_idx,
+                field_count,
+            } => {
                 out.push(OpCode::NewInstance.into());
                 push_i32(&mut out, *name_idx);
                 push_i32(&mut out, *field_count);
             }
-            IrInstr::GetField(v) => { out.push(OpCode::GetField.into()); push_i32(&mut out, *v); }
-            IrInstr::SetField(v) => { out.push(OpCode::SetField.into()); push_i32(&mut out, *v); }
+            IrInstr::GetField(v) => {
+                out.push(OpCode::GetField.into());
+                push_i32(&mut out, *v);
+            }
+            IrInstr::SetField(v) => {
+                out.push(OpCode::SetField.into());
+                push_i32(&mut out, *v);
+            }
             IrInstr::NewList => out.push(OpCode::NewList.into()),
             IrInstr::ListAdd => out.push(OpCode::ListAdd.into()),
             IrInstr::ListGet => out.push(OpCode::ListGet.into()),
@@ -300,7 +354,10 @@ pub fn format_instr(instr: &IrInstr, constants: &[String]) -> String {
         IrInstr::Spawn { addr, argc } => format!("spawn @{} argc={}", addr, argc),
         IrInstr::Return => "return".into(),
         IrInstr::CallNative(id) => format!("call_native {}", id),
-        IrInstr::NewInstance { name_idx, field_count } => match constants.get(*name_idx as usize) {
+        IrInstr::NewInstance {
+            name_idx,
+            field_count,
+        } => match constants.get(*name_idx as usize) {
             Some(s) => format!("new_instance {:?} fields={}", s, field_count),
             None => format!("new_instance {} fields={}", name_idx, field_count),
         },
@@ -353,4 +410,33 @@ pub fn split_amc(bytes: &[u8]) -> Result<(Vec<String>, Vec<u8>), String> {
         return Err("truncated bytecode".to_string());
     }
     Ok((constants, bytes[pos..pos + code_len].to_vec()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode, encode, IrInstr};
+    use crate::codegen::bytecode::OpCode;
+
+    #[test]
+    fn encode_decode_round_trip_preserves_instruction_stream() {
+        let program = vec![
+            (0, IrInstr::Push(42)),
+            (5, IrInstr::PushBool(true)),
+            (7, IrInstr::Add),
+            (8, IrInstr::Jump { target: 14 }),
+            (13, IrInstr::Halt),
+        ];
+        let bytes = encode(&program);
+        let decoded = decode(&bytes).expect("valid bytecode should decode");
+        assert_eq!(decoded, program);
+        assert_eq!(encode(&decoded), bytes);
+    }
+
+    #[test]
+    fn rejects_truncated_operands_and_unknown_opcodes() {
+        assert!(decode(&[OpCode::Push as u8])
+            .unwrap_err()
+            .contains("truncated i32"));
+        assert!(decode(&[u8::MAX]).unwrap_err().contains("unknown opcode"));
+    }
 }

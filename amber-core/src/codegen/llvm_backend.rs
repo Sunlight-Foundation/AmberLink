@@ -70,7 +70,8 @@ impl<'a> Gen<'a> {
     /// Pointer to operand-stack slot `idx` (also grows the frame's max depth).
     fn slot(&mut self, idx: i32) -> String {
         if idx < 0 {
-            self.errors.push(format!("internal: negative stack slot {}", idx));
+            self.errors
+                .push(format!("internal: negative stack slot {}", idx));
             return "%stk".into();
         }
         if idx + 1 > self.max_depth {
@@ -84,9 +85,13 @@ impl<'a> Gen<'a> {
     fn set_value(&mut self, slot: &str, tag: i32, bits: i32) {
         let tp = self.t();
         let bp = self.t();
-        self.line(&format!("{tp} = getelementptr %Value, ptr {slot}, i32 0, i32 0"));
+        self.line(&format!(
+            "{tp} = getelementptr %Value, ptr {slot}, i32 0, i32 0"
+        ));
         self.line(&format!("store i32 {tag}, ptr {tp}"));
-        self.line(&format!("{bp} = getelementptr %Value, ptr {slot}, i32 0, i32 1"));
+        self.line(&format!(
+            "{bp} = getelementptr %Value, ptr {slot}, i32 0, i32 1"
+        ));
         self.line(&format!("store i32 {bits}, ptr {bp}"));
     }
 
@@ -105,7 +110,8 @@ impl<'a> Gen<'a> {
 
     fn need(&mut self, n: i32, what: &str) -> bool {
         if self.depth < n {
-            self.errors.push(format!("internal: stack underflow lowering {}", what));
+            self.errors
+                .push(format!("internal: stack underflow lowering {}", what));
             self.depth = n;
             return false;
         }
@@ -119,7 +125,9 @@ impl<'a> Gen<'a> {
         let a = self.slot(self.depth - 2);
         let b = self.slot(self.depth - 1);
         match cmp_op {
-            Some(op) => self.line(&format!("call void @{func}(ptr {a}, ptr {a}, ptr {b}, i32 {op})")),
+            Some(op) => self.line(&format!(
+                "call void @{func}(ptr {a}, ptr {a}, ptr {b}, i32 {op})"
+            )),
             None => self.line(&format!("call void @{func}(ptr {a}, ptr {a}, ptr {b})")),
         }
         self.depth -= 1;
@@ -134,13 +142,21 @@ impl<'a> Gen<'a> {
 
     fn global_ptr(&mut self, i: i32) -> String {
         let g = self.t();
-        self.line(&format!("{g} = getelementptr %Value, ptr @amb_globals, i32 {i}"));
+        self.line(&format!(
+            "{g} = getelementptr %Value, ptr @amb_globals, i32 {i}"
+        ));
         g
     }
 
     /// Lowers one function body (or the top-level program when `is_main`).
     /// Returns the complete LLVM text for it.
-    fn function(&mut self, instrs: &[&(usize, IrInstr)], name: &str, argc: i32, is_main: bool) -> String {
+    fn function(
+        &mut self,
+        instrs: &[&(usize, IrInstr)],
+        name: &str,
+        argc: i32,
+        is_main: bool,
+    ) -> String {
         self.body.clear();
         self.depth = argc;
         self.max_depth = argc;
@@ -194,7 +210,12 @@ impl<'a> Gen<'a> {
         }
 
         // Jumps may target the end of the region (e.g. the end of the program).
-        let missing: Vec<usize> = self.referenced.iter().copied().filter(|t| !self.emitted.contains(t)).collect();
+        let missing: Vec<usize> = self
+            .referenced
+            .iter()
+            .copied()
+            .filter(|t| !self.emitted.contains(t))
+            .collect();
         for (k, t) in missing.iter().enumerate() {
             if !self.terminated {
                 self.line(&format!("br label %L{t}"));
@@ -224,7 +245,12 @@ impl<'a> Gen<'a> {
         writeln!(out, "entry:").unwrap();
         writeln!(out, "  %stk = alloca [{frame} x %Value]").unwrap();
         if is_main {
-            writeln!(out, "  call void @amb_init(ptr @amb_consts, i32 {})", self.consts.len()).unwrap();
+            writeln!(
+                out,
+                "  call void @amb_init(ptr @amb_consts, i32 {})",
+                self.consts.len()
+            )
+            .unwrap();
         } else {
             // Copy the incoming args into the frame's first slots.
             for i in 0..argc {
@@ -257,7 +283,8 @@ impl<'a> Gen<'a> {
             IrInstr::PushNull => self.push_const(T_NULL, 0),
             IrInstr::LoadConst(i) => {
                 if (*i as usize) >= self.consts.len() {
-                    self.errors.push(format!("@{off}: constant index {} out of range", i));
+                    self.errors
+                        .push(format!("@{off}: constant index {} out of range", i));
                 }
                 self.push_const(T_STR, *i)
             }
@@ -401,8 +428,10 @@ pub fn emit_llvm(prog: &IrProgram, constants: &[String]) -> Result<String, Vec<S
     while i < prog.len() {
         if let (off, IrInstr::Jump { target }) = &prog[i] {
             if *target > *off {
-                let inner: Vec<&(usize, IrInstr)> =
-                    prog.iter().filter(|(o, _)| *o > *off && *o < *target).collect();
+                let inner: Vec<&(usize, IrInstr)> = prog
+                    .iter()
+                    .filter(|(o, _)| *o > *off && *o < *target)
+                    .collect();
                 if let Some((_, IrInstr::Return)) = inner.last() {
                     ranges.push((inner[0].0, *target));
                     while i < prog.len() && prog[i].0 < *target {
@@ -421,15 +450,18 @@ pub fn emit_llvm(prog: &IrProgram, constants: &[String]) -> Result<String, Vec<S
     for (off, ins) in prog {
         if let IrInstr::Call { addr, argc } = ins {
             match argc_of.get(addr) {
-                Some(prev) if prev != argc => {
-                    errors.push(format!("@{off}: function @{addr} called with {} and {} args", prev, argc))
-                }
+                Some(prev) if prev != argc => errors.push(format!(
+                    "@{off}: function @{addr} called with {} and {} args",
+                    prev, argc
+                )),
                 _ => {
                     argc_of.insert(*addr, *argc);
                 }
             }
             if !ranges.iter().any(|(e, _)| *e as i32 == *addr) {
-                errors.push(format!("@{off}: call target @{addr} is not a recognised function entry"));
+                errors.push(format!(
+                    "@{off}: call target @{addr} is not a recognised function entry"
+                ));
             }
         }
     }
@@ -468,7 +500,10 @@ pub fn emit_llvm(prog: &IrProgram, constants: &[String]) -> Result<String, Vec<S
 
     let mut funcs = String::new();
     for (entry, end) in &ranges {
-        let body: Vec<&(usize, IrInstr)> = prog.iter().filter(|(o, _)| *o >= *entry && *o < *end).collect();
+        let body: Vec<&(usize, IrInstr)> = prog
+            .iter()
+            .filter(|(o, _)| *o >= *entry && *o < *end)
+            .collect();
         let argc = *argc_of.get(&(*entry as i32)).unwrap_or(&0) as i32;
         funcs.push_str(&gen.function(&body, &format!("amb_fn_{entry}"), argc, false));
     }
@@ -491,9 +526,22 @@ pub fn emit_llvm(prog: &IrProgram, constants: &[String]) -> Result<String, Vec<S
         )
         .unwrap();
     }
-    let refs: Vec<String> = (0..constants.len()).map(|i| format!("ptr @amb_str{i}")).collect();
-    writeln!(out, "@amb_consts = private constant [{} x ptr] [{}]", constants.len(), refs.join(", ")).unwrap();
-    writeln!(out, "@amb_globals = internal global [{} x %Value] zeroinitializer\n", global_count).unwrap();
+    let refs: Vec<String> = (0..constants.len())
+        .map(|i| format!("ptr @amb_str{i}"))
+        .collect();
+    writeln!(
+        out,
+        "@amb_consts = private constant [{} x ptr] [{}]",
+        constants.len(),
+        refs.join(", ")
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "@amb_globals = internal global [{} x %Value] zeroinitializer\n",
+        global_count
+    )
+    .unwrap();
     out.push_str("declare void @amb_init(ptr, i32)\n");
     for f in ["amb_add", "amb_sub", "amb_mul", "amb_div"] {
         writeln!(out, "declare void @{f}(ptr, ptr, ptr)").unwrap();
@@ -505,4 +553,45 @@ pub fn emit_llvm(prog: &IrProgram, constants: &[String]) -> Result<String, Vec<S
     out.push_str(&funcs);
     out.push_str(&main_fn);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::emit_llvm;
+    use crate::codegen::ir::IrInstr;
+
+    #[test]
+    fn emits_a_valid_minimal_main_and_runtime_declarations() {
+        let program = vec![
+            (0, IrInstr::Push(7)),
+            (5, IrInstr::Print),
+            (6, IrInstr::Halt),
+        ];
+        let llvm = emit_llvm(&program, &[]).expect("supported IR should lower");
+        assert!(llvm.contains("define i32 @main()"));
+        assert!(llvm.contains("call void @amb_print"));
+        assert!(llvm.contains("ret i32 0"));
+    }
+
+    #[test]
+    fn rejects_instructions_outside_the_documented_aot_subset() {
+        let program = vec![(0, IrInstr::NewList), (1, IrInstr::Halt)];
+        let errors = emit_llvm(&program, &[]).expect_err("unsupported instructions must fail");
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("not supported by the LLVM AOT backend")));
+    }
+
+    #[test]
+    fn rejects_calls_to_unknown_function_entries() {
+        let program = vec![
+            (0, IrInstr::Push(1)),
+            (5, IrInstr::Call { addr: 99, argc: 1 }),
+            (10, IrInstr::Halt),
+        ];
+        let errors = emit_llvm(&program, &[]).expect_err("unknown call targets must fail");
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("call target @99 is not a recognised function entry")));
+    }
 }

@@ -1,22 +1,22 @@
+mod ast;
+mod codegen;
+mod error;
 mod lexer;
+mod optimizer;
 mod parser;
 mod semant;
-mod codegen;
-mod ast;
-mod error;
-mod optimizer;
-use error::{CompileError, ErrorList};
 use codegen::bytecode::OpCode;
+use error::{CompileError, ErrorList};
 
+use ast::Stmt;
+use codegen::emitter::Emitter;
+use lexer::Lexer;
+use parser::Parser;
+use semant::SymbolTable;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
-use lexer::Lexer;
-use parser::Parser;
-use semant::SymbolTable;
-use codegen::emitter::Emitter;
-use ast::Stmt;
 
 // Collects the top-level statements of a module and, transitively, the
 // statements of every module it imports. Imports are resolved depth-first, so
@@ -38,7 +38,9 @@ fn collect_module(
         Ok(src) => src,
         Err(e) => {
             errors.push(CompileError::new(
-                0, 0, format!("Could not read module '{}': {}", path.display(), e),
+                0,
+                0,
+                format!("Could not read module '{}': {}", path.display(), e),
             ));
             return;
         }
@@ -87,10 +89,11 @@ fn resolve_and_load(
     out: &mut Vec<Stmt>,
     errors: &mut ErrorList,
 ) {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    candidates.push(base_dir.join(import));
-    candidates.push(PathBuf::from("stdlib").join(import));
-    candidates.push(PathBuf::from(import));
+    let candidates: Vec<PathBuf> = vec![
+        base_dir.join(import),
+        PathBuf::from("stdlib").join(import),
+        PathBuf::from(import),
+    ];
 
     let mut found: Option<PathBuf> = None;
     for cand in candidates {
@@ -103,7 +106,12 @@ fn resolve_and_load(
     match found {
         Some(real) => collect_module(&real, symbols, ordered_paths, out, errors),
         None => errors.push(CompileError::new(
-            0, 0, format!("Could not resolve import '{}', searched relative and stdlib/.", import),
+            0,
+            0,
+            format!(
+                "Could not resolve import '{}', searched relative and stdlib/.",
+                import
+            ),
         )),
     }
 }
@@ -120,14 +128,24 @@ fn compile_file(
     symbols.init_native_registry();
     let mut ordered_paths: Vec<PathBuf> = Vec::new();
     let mut ast: Vec<Stmt> = Vec::new();
-    collect_module(path, &mut symbols, &mut ordered_paths, &mut ast, &mut all_errors);
+    collect_module(
+        path,
+        &mut symbols,
+        &mut ordered_paths,
+        &mut ast,
+        &mut all_errors,
+    );
 
     if all_errors.has_errors() {
         return Err(all_errors);
     }
 
     // Local optimization pass over the merged AST (skipped with --no-opt).
-    let ast = if no_opt { ast } else { optimizer::fold_program(ast) };
+    let ast = if no_opt {
+        ast
+    } else {
+        optimizer::fold_program(ast)
+    };
 
     // Emit the merged AST.
     let mut emit_errors = ErrorList::new();
@@ -200,7 +218,10 @@ fn build_native(ll: &str, exe: &str) {
             process::exit(1);
         }
         Err(e) => {
-            eprintln!("Error: could not run clang ({}). Install LLVM/clang and put it on PATH.", e);
+            eprintln!(
+                "Error: could not run clang ({}). Install LLVM/clang and put it on PATH.",
+                e
+            );
             process::exit(1);
         }
     }
@@ -296,13 +317,14 @@ fn main() {
     let main_path = Path::new(filename);
 
     // Compile the main module.
-    let (main_bytecode, main_modules) = match compile_file(main_path, no_opt, !extra_modules.is_empty()) {
-        Ok(result) => result,
-        Err(errs) => {
-            eprint!("{}", errs);
-            process::exit(1);
-        }
-    };
+    let (main_bytecode, main_modules) =
+        match compile_file(main_path, no_opt, !extra_modules.is_empty()) {
+            Ok(result) => result,
+            Err(errs) => {
+                eprint!("{}", errs);
+                process::exit(1);
+            }
+        };
 
     let output_path = filename.replace(".amb", ".amc");
     fs::write(&output_path, &main_bytecode).expect("Failed to write file");
@@ -335,8 +357,7 @@ fn main() {
         module_entries.push((entry_name, mod_bytecode));
         println!(
             "Amberlink: Compiled module {} ({} bytes) for archive",
-            mod_path_str,
-            entry_len
+            mod_path_str, entry_len
         );
     }
 
@@ -384,9 +405,7 @@ fn main() {
         fs::write(&archive_path, &ama).expect("Failed to write archive");
         println!(
             "Amberlink: Wrote archive {} ({} modules, {} resources)",
-            archive_path,
-            module_count,
-            resource_count
+            archive_path, module_count, resource_count
         );
     }
 }

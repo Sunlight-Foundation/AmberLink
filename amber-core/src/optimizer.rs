@@ -23,7 +23,11 @@ fn fold_binary(l: Expr, op: &Op, r: Expr) -> Expr {
             Op::Mul => Expr::Integer(a.wrapping_mul(b)),
             Op::Div => {
                 if b == 0 {
-                    Expr::Binary(Box::new(Expr::Integer(a)), op.clone(), Box::new(Expr::Integer(b)))
+                    Expr::Binary(
+                        Box::new(Expr::Integer(a)),
+                        op.clone(),
+                        Box::new(Expr::Integer(b)),
+                    )
                 } else {
                     Expr::Integer(a.wrapping_div(b))
                 }
@@ -64,7 +68,11 @@ fn fold_binary(l: Expr, op: &Op, r: Expr) -> Expr {
         (Expr::Boolean(a), Expr::Boolean(b)) => match op {
             Op::Equals => Expr::Boolean(a == b),
             Op::NotEquals => Expr::Boolean(a != b),
-            _ => Expr::Binary(Box::new(Expr::Boolean(a)), op.clone(), Box::new(Expr::Boolean(b))),
+            _ => Expr::Binary(
+                Box::new(Expr::Boolean(a)),
+                op.clone(),
+                Box::new(Expr::Boolean(b)),
+            ),
         },
         (Expr::StringLiteral(a), Expr::StringLiteral(b)) => match op {
             Op::Add => Expr::StringLiteral(a + &b),
@@ -127,26 +135,18 @@ pub fn fold_stmt(stmt: Stmt) -> Stmt {
             Box::new(fold_stmt(*then_b)),
             else_b.map(|b| Box::new(fold_stmt(*b))),
         ),
-        Stmt::While(cond, body) => {
-            Stmt::While(fold_expr(cond), Box::new(fold_stmt(*body)))
-        }
+        Stmt::While(cond, body) => Stmt::While(fold_expr(cond), Box::new(fold_stmt(*body))),
         Stmt::Expression(expr) => Stmt::Expression(fold_expr(expr)),
         Stmt::Function(name, params, body, vis, is_static) => {
             Stmt::Function(name, params, fold_stmt_list(body), vis, is_static)
         }
-        Stmt::Class(name, parent, fields, methods, implements) => Stmt::Class(
-            name,
-            parent,
-            fields,
-            fold_stmt_list(methods),
-            implements,
-        ),
+        Stmt::Class(name, parent, fields, methods, implements) => {
+            Stmt::Class(name, parent, fields, fold_stmt_list(methods), implements)
+        }
         Stmt::FieldSet(obj, field, value) => {
             Stmt::FieldSet(Box::new(fold_expr(*obj)), field, fold_expr(value))
         }
-        Stmt::ListAdd(list, value) => {
-            Stmt::ListAdd(Box::new(fold_expr(*list)), fold_expr(value))
-        }
+        Stmt::ListAdd(list, value) => Stmt::ListAdd(Box::new(fold_expr(*list)), fold_expr(value)),
         Stmt::ListSet(list, index, value) => Stmt::ListSet(
             Box::new(fold_expr(*list)),
             Box::new(fold_expr(*index)),
@@ -159,4 +159,68 @@ pub fn fold_stmt(stmt: Stmt) -> Stmt {
 /// Folds a whole merged program (all modules' statements).
 pub fn fold_program(ast: Vec<Stmt>) -> Vec<Stmt> {
     fold_stmt_list(ast)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fold_expr;
+    use crate::ast::{Expr, Op};
+
+    #[test]
+    fn folds_nested_integer_arithmetic_and_comparisons() {
+        let expr = Expr::Binary(
+            Box::new(Expr::Binary(
+                Box::new(Expr::Integer(6)),
+                Op::Mul,
+                Box::new(Expr::Integer(7)),
+            )),
+            Op::Equals,
+            Box::new(Expr::Integer(42)),
+        );
+        assert_eq!(fold_expr(expr), Expr::Boolean(true));
+    }
+
+    #[test]
+    fn preserves_division_by_zero_for_runtime() {
+        let expr = Expr::Binary(
+            Box::new(Expr::Integer(9)),
+            Op::Div,
+            Box::new(Expr::Integer(0)),
+        );
+        assert_eq!(
+            fold_expr(expr),
+            Expr::Binary(
+                Box::new(Expr::Integer(9)),
+                Op::Div,
+                Box::new(Expr::Integer(0))
+            )
+        );
+    }
+
+    #[test]
+    fn folds_string_concatenation_and_content_equality() {
+        let joined = fold_expr(Expr::Binary(
+            Box::new(Expr::StringLiteral("amber".into())),
+            Op::Add,
+            Box::new(Expr::StringLiteral("link".into())),
+        ));
+        assert_eq!(joined, Expr::StringLiteral("amberlink".into()));
+
+        let equal = fold_expr(Expr::Binary(
+            Box::new(Expr::StringLiteral("same".into())),
+            Op::Equals,
+            Box::new(Expr::StringLiteral("same".into())),
+        ));
+        assert_eq!(equal, Expr::Boolean(true));
+    }
+
+    #[test]
+    fn uses_vm_float_precision_when_folding() {
+        let folded = fold_expr(Expr::Binary(
+            Box::new(Expr::Float(0.1)),
+            Op::Add,
+            Box::new(Expr::Float(0.2)),
+        ));
+        assert_eq!(folded, Expr::Float((0.1_f32 + 0.2_f32) as f64));
+    }
 }

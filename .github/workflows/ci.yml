@@ -36,15 +36,14 @@ jobs:
         with:
           workspaces: amber-core
 
-      - name: Check Rust formatting (advisory)
-        continue-on-error: true
+      - name: Check Rust formatting
         run: cargo fmt --manifest-path amber-core/Cargo.toml --check
 
       - name: Run Rust tests
         run: cargo test --manifest-path amber-core/Cargo.toml
 
       - name: Run Clippy
-        run: cargo clippy --manifest-path amber-core/Cargo.toml --all-targets --all-features
+        run: cargo clippy --manifest-path amber-core/Cargo.toml --all-targets --all-features -- -D warnings
 
       - name: Build Amber compiler
         run: cargo build --release --manifest-path amber-core/Cargo.toml
@@ -89,10 +88,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang
 
-      - name: Smoke-test LLVM native compilation
+      - name: Differential-test LLVM native backend
         if: runner.os == 'Linux'
         shell: bash
-        run: |
-          bin/ambc examples/hello.amb --native "$RUNNER_TEMP/amberlink-native-smoke"
-          output=$("$RUNNER_TEMP/amberlink-native-smoke")
-          test "$output" = "Hello, Amberlink!"
+        run: bash tools/test-native.sh
