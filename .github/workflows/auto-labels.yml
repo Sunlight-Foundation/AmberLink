@@ -1,0 +1,127 @@
+name: Automatic Issue and PR Labels
+
+on:
+  issues:
+    types: [opened, edited]
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create managed labels and label the issue or pull request
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const definitions = [
+              { name: "type: bug", color: "d73a4a", description: "Bug, defect, or regression" },
+              { name: "type: feature", color: "a2eeef", description: "Feature request or new capability" },
+              { name: "type: docs", color: "0075ca", description: "Documentation changes" },
+              { name: "type: refactor", color: "c5def5", description: "Internal restructuring without intended behavior changes" },
+              { name: "type: tests", color: "0e8a16", description: "Tests or regression coverage" },
+              { name: "type: ci", color: "5319e7", description: "CI, release, or automation changes" },
+              { name: "type: performance", color: "f9d0c4", description: "Performance improvements or regressions" },
+              { name: "type: question", color: "d876e3", description: "Question or help request" },
+              { name: "area: compiler", color: "1d76db", description: "Amber compiler and language frontend" },
+              { name: "area: vm", color: "0052cc", description: "Amber Virtual Machine" },
+              { name: "area: runtime", color: "006b75", description: "Native runtime and execution support" },
+              { name: "area: stdlib", color: "0e8a16", description: "Standard library" },
+              { name: "area: tooling", color: "5319e7", description: "Developer tools, build scripts, and CLI" },
+              { name: "area: ci", color: "5319e7", description: "GitHub Actions and repository automation" },
+              { name: "status: needs triage", color: "fbca04", description: "New issue awaiting review and prioritization" },
+              { name: "status: needs review", color: "fbca04", description: "Pull request awaiting review" },
+              { name: "size: small", color: "c2e0c6", description: "Up to 50 changed lines" },
+              { name: "size: medium", color: "fef2c0", description: "51–200 changed lines" },
+              { name: "size: large", color: "f9d0c4", description: "More than 200 changed lines" }
+            ];
+
+            for (const label of definitions) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: label.name });
+              } catch (error) {
+                if (error.status !== 404) throw error;
+                try {
+                  await github.rest.issues.createLabel({ owner, repo, ...label });
+                } catch (createError) {
+                  if (createError.status !== 422) throw createError;
+                }
+              }
+            }
+
+            const managedNames = new Set(definitions.map(label => label.name));
+            const managedTypeNames = new Set(definitions.filter(label => label.name.startsWith("type:")).map(label => label.name));
+            const add = new Set();
+            const removeManagedLabels = async (issueNumber, existingLabels, namesToRemove = managedNames) => {
+              for (const label of existingLabels) {
+                if (namesToRemove.has(label.name)) {
+                  await github.rest.issues.removeLabel({
+                    owner, repo, issue_number: issueNumber, name: label.name
+                  });
+                }
+              }
+            };
+
+            if (context.eventName === "issues") {
+              const issue = context.payload.issue;
+              const issueNumber = issue.number;
+              const text = `${issue.title}\n${issue.body || ""}`.toLowerCase();
+              await removeManagedLabels(issueNumber, issue.labels || [], managedTypeNames);
+
+              if (context.payload.action === "opened") add.add("status: needs triage");
+              if (/\b(bug|crash|exception|regression|broken|fails?)\b/.test(text)) add.add("type: bug");
+              else if (/\b(feature request|enhancement|would like|please add|new feature)\b/.test(text)) add.add("type: feature");
+              else if (/\b(documentation|docs|readme|language guide)\b/.test(text)) add.add("type: docs");
+              else if (/\b(question|how do i|how can i|help me)\b/.test(text)) add.add("type: question");
+
+              if (add.size) {
+                await github.rest.issues.addLabels({ owner, repo, issue_number: issueNumber, labels: [...add] });
+              }
+              core.info(`Applied issue labels: ${[...add].join(", ") || "none"}`);
+              return;
+            }
+
+            const pr = context.payload.pull_request;
+            const issueNumber = pr.number;
+            await removeManagedLabels(issueNumber, pr.labels || []);
+
+            const titlePrefix = (pr.title || "").match(/^([a-z]+)(\([^)]*\))?:/i)?.[1]?.toLowerCase();
+            const typeByPrefix = {
+              fix: "type: bug", bugfix: "type: bug",
+              feat: "type: feature", feature: "type: feature",
+              doc: "type: docs", docs: "type: docs",
+              refactor: "type: refactor", test: "type: tests", tests: "type: tests",
+              ci: "type: ci", build: "type: ci", chore: "type: ci",
+              perf: "type: performance", performance: "type: performance"
+            };
+            if (titlePrefix && typeByPrefix[titlePrefix]) add.add(typeByPrefix[titlePrefix]);
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: issueNumber, per_page: 100
+            });
+            for (const file of files) {
+              const path = file.filename;
+              if (path.startsWith("amber-core/runtime/")) add.add("area: runtime");
+              else if (path.startsWith("amber-core/")) add.add("area: compiler");
+              if (path.startsWith("amber-vm/")) add.add("area: vm");
+              if (path.startsWith("stdlib/")) add.add("area: stdlib");
+              if (path.startsWith("tools/") || path === "Makefile" || path.startsWith("bin/")) add.add("area: tooling");
+              if (path.startsWith(".github/")) add.add("area: ci");
+              if (path.startsWith("examples/") || path.startsWith("bench/")) add.add("type: tests");
+              if (/^(README|LanguageGuide|Document|roadmap)\.md$/i.test(path)) add.add("type: docs");
+            }
+
+            const changedLines = (pr.additions || 0) + (pr.deletions || 0);
+            add.add(changedLines <= 50 ? "size: small" : changedLines <= 200 ? "size: medium" : "size: large");
+            add.add("status: needs review");
+
+            await github.rest.issues.addLabels({
+              owner, repo, issue_number: issueNumber, labels: [...add]
+            });
+            core.info(`Applied PR labels: ${[...add].join(", ") || "none"}`);

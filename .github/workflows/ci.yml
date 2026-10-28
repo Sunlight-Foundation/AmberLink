@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, beta_development]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: amber-core
+
+      - name: Check Rust formatting (advisory)
+        continue-on-error: true
+        run: cargo fmt --manifest-path amber-core/Cargo.toml --check
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path amber-core/Cargo.toml
+
+      - name: Run Clippy
+        run: cargo clippy --manifest-path amber-core/Cargo.toml --all-targets --all-features
+
+      - name: Build Amber compiler
+        run: cargo build --release --manifest-path amber-core/Cargo.toml
+
+      - name: Configure AVM
+        run: cmake -S amber-vm -B build/amber-vm -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build AVM
+        run: cmake --build build/amber-vm --config Release --parallel
+
+      - name: Stage Windows toolchain
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force bin | Out-Null
+          Copy-Item amber-core/target/release/amber-core.exe bin/ambc.exe
+          $vm = Get-ChildItem build/amber-vm -Recurse -Filter avm.exe | Select-Object -First 1
+          if (-not $vm) { throw "AVM executable was not produced by CMake." }
+          Copy-Item $vm.FullName bin/avm.exe
+
+      - name: Stage Linux toolchain
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p bin
+          cp amber-core/target/release/amber-core bin/ambc
+          cp build/amber-vm/avm bin/avm
+
+      - name: Run Amberlink regression suite (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tools/test.ps1
+
+      - name: Run Amberlink regression suite (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash tools/test.sh
+
+      - name: Install Clang
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - name: Smoke-test LLVM native compilation
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          bin/ambc examples/hello.amb --native "$RUNNER_TEMP/amberlink-native-smoke"
+          output=$("$RUNNER_TEMP/amberlink-native-smoke")
+          test "$output" = "Hello, Amberlink!"

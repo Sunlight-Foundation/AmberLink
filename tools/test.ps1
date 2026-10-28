@@ -94,3 +94,4 @@ if ($server) { Stop-Process -Id $server.Id -ErrorAction SilentlyContinue }
 
 Write-Output "FAILURES=${fail}"
 if ($fail -gt 0) { exit 1 }
+exit 0
