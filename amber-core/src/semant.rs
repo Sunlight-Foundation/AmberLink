@@ -1,5 +1,5 @@
 // amber-core/src/semant.rs
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use crate::ast::{Expr, Type, Op};
 
 pub struct FunctionInfo {
@@ -47,6 +47,9 @@ pub struct SymbolTable {
     pub classes: HashMap<String, ClassInfo>,
     pub interfaces: HashMap<String, InterfaceInfo>,
     pub natives: HashMap<String, NativeInfo>,
+    // Functions declared by separately-compiled modules (multi-module archives).
+    // Calls to these are left unresolved and recorded as link-time imports.
+    pub externs: HashSet<String>,
     pub variables: HashMap<String, u32>,
     pub locals: HashMap<String, u32>,
     pub variable_types: HashMap<String, crate::ast::Type>,
@@ -61,6 +64,7 @@ impl SymbolTable {
             classes: HashMap::new(),
             interfaces: HashMap::new(),
             natives: HashMap::new(),
+            externs: HashSet::new(),
             variables: HashMap::new(),
             locals: HashMap::new(),
             variable_types: HashMap::new(),

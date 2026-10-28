@@ -1,0 +1,8 @@
+int factor = 99
+extern int doubleIt(int x)
+extern int quadruple(int x)
+extern String moduleMessage()
+print doubleIt(21)
+print quadruple(21)
+print factor
+print moduleMessage()

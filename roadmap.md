@@ -70,7 +70,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 
 ---
 
-## Phase 6 — Advanced Language Features (v0.9) 🚧 In Progress
+## Phase 6 — Advanced Language Features (v0.9) ✅ Complete
 *The "Expressive" milestone — sophisticated type system. Build order: type foundation → null safety → generics → pattern matching → exceptions → LLVM backend → multi-module archives.*
 
 - [x] **Type system foundation** — `ast::Type` extended with `Nullable(Box<Type>)` (`T?`) and `Generic(String, Vec<Type>)` (`Class<T>`); `lexer.rs` `?` token; `parser.rs` `parse_type` handles `T?` and `Class<T>` syntax; `semant.rs` `types_compatible` handles `T`→`T?` assignability and `Nullable`/`Generic` compatibility; method mangling updated for new variants
@@ -79,7 +79,7 @@ Development is split into phases, each building toward a robust, modern, high-pe
 - [x] **Pattern matching** — `match` statement with literal patterns (`1`, `"hello"`, `true`) and wildcard (`_`); lowered to if/else chains, no VM changes
 - [x] **Exception handling** — `try { ... } catch e { ... }` and `throw <expr>`; new bytecode opcodes (`OP_TRY`/`OP_END_TRY`/`OP_THROW`); VM handler stack with stack unwinding on throw; handlers cleaned up on return
 - [x] **LLVM AOT backend** — compile `.amb` to textual LLVM IR and native machine code through `clang`; `--emit-llvm` emits IR and `--native <path>` builds a native executable without an `llvm-sys` dependency. Verified with a release compiler build and a native `hello.amb` smoke test (build + execution passed). Broader feature-parity testing remains advisable.
-- [ ] **Multi-module archives** — separately-compiled modules with runtime linking/loading inside `.ama` (requires `.ama` format and VM loader changes)
+- [x] **Multi-module archives** — separately compiled `.amc` modules bundled in `.ama` archives; `extern` declarations produce import metadata, and the AVM resolves exports, relocates calls/spawns/exception handlers, merges constant pools, isolates module globals, and runs module initializers before the main program. Regression coverage verifies a three-module archive, cross-module calls, internal calls, string constants, independent globals, module initialization, direct `.amc` execution, and clean failure for unresolved imports.
 
 ---
 

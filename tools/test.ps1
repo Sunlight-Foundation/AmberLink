@@ -55,6 +55,41 @@ foreach ($s in $stdlib) {
     if ($LASTEXITCODE -ne 0) { Write-Output "${s} : COMPILE FAIL"; $fail++ } else { Write-Output "${s} : OK" }
 }
 
+# Multi-module archive integration: compile separately, link at load time, execute.
+$archivePath = Join-Path $env:TEMP "amberlink-multimodule-test.ama"
+& ".\${ambc}" "examples\multimodule_main.amb" --module "examples\multimodule_math.amb" --module "examples\multimodule_helpers.amb" --archive $archivePath 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Output "multimodule : COMPILE/ARCHIVE FAIL"
+    $fail++
+} else {
+    $archiveOutput = & ".\${avm}" $archivePath 2>&1
+    $archiveExit = $LASTEXITCODE
+    $actual = ($archiveOutput -join "`n").Trim()
+    if ($archiveExit -ne 0 -or $actual -ne "42`n84`n99`nmodule-string-ok") {
+        Write-Output "multimodule : RUN FAIL (exit=$archiveExit, output=$actual)"
+        $fail++
+    } else {
+        Write-Output "multimodule : OK"
+    }
+}
+
+# A missing imported symbol must fail clearly rather than jumping to address zero.
+$missingArchive = Join-Path $env:TEMP "amberlink-multimodule-missing-test.ama"
+& ".\${ambc}" "examples\multimodule_main.amb" --module "examples\multimodule_missing.amb" --module "examples\multimodule_helpers.amb" --archive $missingArchive 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Output "multimodule_missing : COMPILE/ARCHIVE FAIL"
+    $fail++
+} else {
+    $missingOutput = & ".\${avm}" $missingArchive 2>&1
+    $missingExit = $LASTEXITCODE
+    if ($missingExit -eq 0 -or (($missingOutput -join "`n") -notmatch "Unresolved external function")) {
+        Write-Output "multimodule_missing : EXPECTED LINK ERROR NOT REPORTED"
+        $fail++
+    } else {
+        Write-Output "multimodule_missing : OK (unresolved import rejected)"
+    }
+}
+
 if ($server) { Stop-Process -Id $server.Id -ErrorAction SilentlyContinue }
 
 Write-Output "FAILURES=${fail}"

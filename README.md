@@ -59,6 +59,21 @@ make watch file=main.amb
 
 ---
 
+## Multi-module archives
+
+Compile a main source file and one or more separately compiled library modules into an `.ama` archive. Imported functions must be declared with `extern` in the importing source.
+
+Example source declaration: `extern int doubleIt(int value)`
+
+On Windows, compile and run an archive with:
+
+    .\bin\ambc.exe main.amb --module math.amb --archive app.ama
+    .\bin\avm.exe app.ama
+
+On Linux/macOS, use `./bin/ambc` and `./bin/avm`. For a single compiled source, `ambc main.amb` writes `main.amc`, and `avm main.amc` runs that bytecode directly.
+
+---
+
 ## Roadmap
 
 See [roadmap.md](roadmap.md) for the full development plan.
@@ -68,7 +83,7 @@ See [roadmap.md](roadmap.md) for the full development plan.
 - **Phase 3** — Object-Oriented Programming (v0.6) ✅
 - **Phase 4** — Ecosystem & Tooling (v0.7) ✅
 - **Phase 5** — Performance (v0.8) ✅
-- **Phase 6** — Advanced Language Features (v0.9) 🚧 In Progress
+- **Phase 6** — Advanced Language Features (v0.9) ✅
 - **Phase 7** — JVM Integration (v1.0)
 - **Phase 8** — Documentation & Community (v1.0)
 

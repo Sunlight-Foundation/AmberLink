@@ -129,6 +129,7 @@ impl Parser {
             Token::Class => self.parse_class_decl(symbols),
             Token::Interface => self.parse_interface_decl(),
             Token::Import => self.parse_import(),
+            Token::Extern => self.parse_extern_function(symbols),
             Token::Return => self.parse_return(),
             Token::Print => self.parse_print(),
             Token::Match => self.parse_match(symbols),
@@ -159,6 +160,34 @@ impl Parser {
                 Stmt::Expression(expr)
             }
         }
+    }
+
+    fn parse_extern_function(&mut self, symbols: &mut SymbolTable) -> Stmt {
+        self.advance();
+        let return_type = self.parse_type();
+        let name = match self.advance() {
+            Token::Identifier(n) => n,
+            t => return self.error_stmt(format!("Expected external function name, found {:?}", t)),
+        };
+        if self.peek() != Token::LParen { return self.error_stmt("Expected '(' after external function name"); }
+        self.advance();
+        let mut params = Vec::new();
+        if self.peek() != Token::RParen {
+            loop {
+                let ty = self.parse_type();
+                match self.advance() {
+                    Token::Identifier(param) => params.push((param, ty)),
+                    _ => return self.error_stmt("Expected external function parameter name"),
+                }
+                if self.peek() == Token::Comma { self.advance(); } else { break; }
+            }
+        }
+        if self.peek() != Token::RParen { return self.error_stmt("Expected ')' after external function parameters"); }
+        self.advance();
+        self.consume_semicolon();
+        symbols.externs.insert(name.clone());
+        symbols.functions.insert(name.clone(), crate::semant::FunctionInfo { name: name.clone(), address: 0, return_type });
+        Stmt::ExternFunction(name, params)
     }
 
     fn parse_import(&mut self) -> Stmt {

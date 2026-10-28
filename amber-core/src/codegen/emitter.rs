@@ -12,10 +12,17 @@ pub struct Emitter {
     pub calls_to_patch: Vec<(usize, String)>, // (Bytecode Index, Function Name)
     pub try_patches: Vec<usize>,              // Bytecode Index of OP_TRY catch-addr placeholder
     pub current_class: Option<String>,
+    // Multi-module linking: calls to functions defined in other modules
+    // ((operand offset, function name)) and functions this module defines
+    // ((name, code address)). Serialized as the optional "AMLK" trailer.
+    pub imports: Vec<(usize, String)>,
+    pub exports: Vec<(String, u32)>,
+    // Only multi-module builds carry the trailer; plain programs stay byte-identical.
+    pub emit_link_info: bool,
 }
 
 impl Emitter {
-    pub fn new() -> Self { Self { code: Vec::new(), constants: Vec::new(), calls_to_patch: Vec::new(), try_patches: Vec::new(), current_class: None } }
+    pub fn new() -> Self { Self { code: Vec::new(), constants: Vec::new(), calls_to_patch: Vec::new(), try_patches: Vec::new(), current_class: None, imports: Vec::new(), exports: Vec::new(), emit_link_info: false } }
 
     pub fn emit_byte(&mut self, b: u8) { self.code.push(b); }
     pub fn emit_u16(&mut self, val: u16) {
@@ -425,7 +432,22 @@ impl Emitter {
     }
 
     pub fn finalize(&mut self, symbols: &SymbolTable, errors: &mut ErrorList) {
+        // Everything this module defines is exported for other modules to link against.
+        let mut exports: Vec<(String, u32)> = symbols
+            .functions
+            .iter()
+            .filter(|(n, _)| !symbols.externs.contains(*n))
+            .map(|(n, f)| (n.clone(), f.address))
+            .collect();
+        exports.sort();
+        self.exports = exports;
+
         for (index, name) in &self.calls_to_patch {
+            // Defined in another module: leave the operand for the loader to patch.
+            if symbols.externs.contains(name) {
+                self.imports.push((*index, name.clone()));
+                continue;
+            }
             let func_info = match symbols.functions.get(name) {
                 Some(f) => f,
                 None => {
@@ -747,9 +769,8 @@ impl Emitter {
             Stmt::Error => {
                 // Shouldn't reach emission with parse errors; nothing to emit.
             }
-            Stmt::Import(_) => {
-                // Imports are resolved by the compiler driver (main.rs) before
-                // emission and produce no bytecode of their own.
+            Stmt::Import(_) | Stmt::ExternFunction(_, _) => {
+                // Imports and external declarations are compile-time only.
             }
             Stmt::Match(subject, arms) => {
                 // Lower match to if/else chains: match s { p1 => b1; p2 => b2; _ => b3 }
@@ -863,6 +884,27 @@ impl Emitter {
 
         out.extend_from_slice(&(self.code.len() as u32).to_le_bytes());
         out.extend_from_slice(&self.code);
+
+        // Optional link trailer (multi-module archives). Older loaders stop
+        // reading after the code, so single-module images are unchanged.
+        //   "AMLK"
+        //   export_count u32, then { name_len u32, name, address u32 }
+        //   import_count u32, then { name_len u32, name, operand_offset u32 }
+        if self.emit_link_info {
+            out.extend_from_slice(b"AMLK");
+            out.extend_from_slice(&(self.exports.len() as u32).to_le_bytes());
+            for (name, addr) in &self.exports {
+                out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                out.extend_from_slice(name.as_bytes());
+                out.extend_from_slice(&addr.to_le_bytes());
+            }
+            out.extend_from_slice(&(self.imports.len() as u32).to_le_bytes());
+            for (offset, name) in &self.imports {
+                out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+                out.extend_from_slice(name.as_bytes());
+                out.extend_from_slice(&(*offset as u32).to_le_bytes());
+            }
+        }
         out
     }
 }

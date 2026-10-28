@@ -113,6 +113,7 @@ fn resolve_and_load(
 fn compile_file(
     path: &Path,
     no_opt: bool,
+    emit_link_info: bool,
 ) -> Result<(Vec<u8>, Vec<PathBuf>), ErrorList> {
     let mut all_errors = ErrorList::new();
     let mut symbols = SymbolTable::new();
@@ -131,6 +132,7 @@ fn compile_file(
     // Emit the merged AST.
     let mut emit_errors = ErrorList::new();
     let mut emitter = Emitter::new();
+    emitter.emit_link_info = emit_link_info;
     for stmt in ast {
         emitter.emit_stmt(&stmt, &mut symbols, &mut emit_errors);
     }
@@ -294,7 +296,7 @@ fn main() {
     let main_path = Path::new(filename);
 
     // Compile the main module.
-    let (main_bytecode, main_modules) = match compile_file(main_path, no_opt) {
+    let (main_bytecode, main_modules) = match compile_file(main_path, no_opt, !extra_modules.is_empty()) {
         Ok(result) => result,
         Err(errs) => {
             eprint!("{}", errs);
@@ -316,7 +318,7 @@ fn main() {
         vec![(codegen::archive::MAIN_ENTRY.to_string(), main_bytecode)];
     for mod_path_str in &extra_modules {
         let mod_path = Path::new(mod_path_str);
-        let (mod_bytecode, _) = match compile_file(mod_path, no_opt) {
+        let (mod_bytecode, _) = match compile_file(mod_path, no_opt, true) {
             Ok(result) => result,
             Err(errs) => {
                 eprint!("{}", errs);
@@ -327,7 +329,8 @@ fn main() {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("module")
-            .to_string();
+            .to_string()
+            .replace(".amb", ".amc");
         let entry_len = mod_bytecode.len();
         module_entries.push((entry_name, mod_bytecode));
         println!(
