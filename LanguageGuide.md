@@ -274,13 +274,13 @@ int triple(int n) { return n * 3 }
 
 ## 10. Archives (`.ama`)
 
-An Amberlink Archive packages a compiled program plus its data files into one distributable file — the analog of a Java JAR for the current single-unit model.
+An Amberlink Archive (`.ama`) packages a program's compiled bytecode, separately compiled modules, and optional data resources into one distributable file. It can distribute a multi-module application together with its resources.
 
 ### Building an archive
 ```sh
 ambc examples/archive_test.amb --archive app.ama --resource welcome=examples/resources/welcome.txt
 ```
-`--resource name=path` can be repeated to bundle multiple files. The compiled program is stored under the reserved entry `main`; every `--resource` becomes a named entry.
+`--resource name=path` can be repeated to bundle multiple files. The main program is stored under the reserved entry `main`; every resource becomes a named entry. Use `--module path.amb` for each separately compiled module to include in the archive. The importing source declares module-provided functions with `extern`, for example `extern int doubleIt(int value)`. Module declarations are resolved against the modules bundled in the archive. This is distinct from source-level `import`, which merges source files into one compilation unit before compilation.
 
 ### Running an archive
 ```sh
