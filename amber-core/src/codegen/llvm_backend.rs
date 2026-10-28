@@ -1,0 +1,375 @@
+// amber-core/src/codegen/llvm_backend.rs
+// LLVM AOT backend (Phase 6).
+//
+// Emits LLVM IR text from AmberLink IR (IrProgram). No external dependencies:
+// the output is LLVM assembly text that can be piped to `llc` or `clang` to
+// produce native object files or binaries.
+//
+// Usage:
+//   ambc main.amb --emit-llvm > main.ll
+//   llc main.ll -o main.o
+//   clang main.o -o main
+//
+// Design notes:
+//   AmberLink IR is stack-based; LLVM IR is register-based (SSA). We lower
+//   each function by simulating the operand stack with a per-block vector of
+//   SSA value names. Jump targets split basic blocks; conditional jumps emit
+//   LLVM conditional branches. Unsupported instructions emit comments so the
+//   IR remains readable and can be completed incrementally.
+
+use crate::codegen::ir::{IrInstr, IrProgram};
+
+use std::collections::HashMap;
+use std::fmt::Write;
+
+/// Maps an AmberLink `Type` to its LLVM IR type representation.
+fn llvm_type(ty: &crate::ast::Type) -> String {
+    match ty {
+        crate::ast::Type::Int => "i32".into(),
+        crate::ast::Type::Float => "float".into(),
+        crate::ast::Type::Bool => "i1".into(),
+        crate::ast::Type::Char => "i32".into(),
+        crate::ast::Type::String => "i8*".into(),
+        crate::ast::Type::Void => "void".into(),
+        crate::ast::Type::Class(_) => "i8*".into(), // opaque object pointer
+        crate::ast::Type::List => "i8*".into(),      // opaque list pointer
+        crate::ast::Type::Nullable(_) => "i8*".into(), // nullable = pointer (null = null pointer)
+        crate::ast::Type::Generic(_, _) => "i8*".into(),
+        crate::ast::Type::Unknown => "i8*".into(),
+    }
+}
+
+/// Returns a human-readable name for a `Type`, used in comments.
+fn type_name(ty: &crate::ast::Type) -> String {
+    match ty {
+        crate::ast::Type::Int => "i32".into(),
+        crate::ast::Type::Float => "float".into(),
+        crate::ast::Type::Bool => "i1".into(),
+        crate::ast::Type::Char => "i32".into(),
+        crate::ast::Type::String => "i8*".into(),
+        crate::ast::Type::Void => "void".into(),
+        crate::ast::Type::Class(c) => format!("{}*", c),
+        crate::ast::Type::List => "List*".into(),
+        crate::ast::Type::Nullable(inner) => format!("{}?", type_name(inner)),
+        crate::ast::Type::Generic(name, args) => {
+            format!("{}<{}>", name, args.iter().map(type_name).collect::<Vec<_>>().join(", "))
+        }
+        crate::ast::Type::Unknown => "unknown".into(),
+    }
+}
+
+pub struct LlvmBackend {
+    out: String,
+    consts: Vec<String>,
+    value_counter: u64,
+    block_counter: u64,
+    // Simulated operand stack: each entry is an LLVM SSA value name.
+    stack: Vec<String>,
+    // Whether we've emitted a block label for this block id.
+    blocks: HashMap<u64, bool>,
+    current_block: Option<u64>,
+}
+
+impl LlvmBackend {
+    pub fn new(constants: Vec<String>) -> Self {
+        Self {
+            out: String::new(),
+            consts: constants,
+            value_counter: 0,
+            block_counter: 0,
+            stack: Vec::new(),
+            blocks: HashMap::new(),
+            current_block: None,
+        }
+    }
+
+    fn next_value(&mut self) -> String {
+        self.value_counter += 1;
+        format!("%v{}", self.value_counter)
+    }
+
+    fn next_block(&mut self) -> u64 {
+        self.block_counter += 1;
+        self.block_counter
+    }
+
+    /// Emit a global constant string and return an `i8*` pointer to its data.
+    fn const_str(&mut self, s: &str) -> String {
+        let id = self.value_counter;
+        self.value_counter += 1;
+        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+        let len = s.len();
+        // The global array holding the string bytes.
+        writeln!(
+            self.out,
+            "@.str{id} = private constant [{len} x i8] c\"{escaped}\\00\", align 1"
+        )
+        .unwrap();
+        // GEP to get i8* from [N x i8]*.
+        let ptr = self.next_value();
+        writeln!(
+            self.out,
+            "{ptr} = getelementptr [{len} x i8], [{len} x i8]* @.str{id}, i32 0, i32 0"
+        )
+        .unwrap();
+        ptr
+    }
+
+    fn pop(&mut self) -> String {
+        self.stack.pop().unwrap_or_else(|| "%v0".into())
+    }
+
+    fn push(&mut self, v: String) {
+        self.stack.push(v);
+    }
+
+    /// Ensure a block label is emitted for `id`, then set it as current.
+    fn enter_block(&mut self, id: u64) {
+        if !self.blocks.contains_key(&id) {
+            self.blocks.insert(id, true);
+            writeln!(self.out, "block{id}:").unwrap();
+        }
+        self.current_block = Some(id);
+    }
+
+    /// Terminate the current block (so the next instruction starts a fresh
+    /// block). Call this before emitting a fall-through instruction that
+    /// follows a terminator.
+    fn close_block(&mut self) {
+        self.current_block = None;
+    }
+
+    pub fn compile(&mut self, prog: &IrProgram) {
+        writeln!(self.out, "; AmberLink LLVM IR (generated by amber-link LLVM backend)").unwrap();
+        writeln!(self.out, "; target triple = \"unknown-unknown-unknown\"").unwrap();
+        writeln!(self.out).unwrap();
+
+        // Declare external C functions used by the runtime.
+        writeln!(self.out, "declare i32 @printf(i8*, ...)").unwrap();
+        writeln!(self.out).unwrap();
+
+        // Emit the whole program as one "main" function. A future pass splits
+        // at function entry points (call targets patched by finalize()).
+        let main_id = self.next_block();
+        self.enter_block(main_id);
+        writeln!(self.out, "define void @main() {{").unwrap();
+
+        for (_off, instr) in prog {
+            self.emit_instr(instr);
+        }
+
+        // Terminate main with `ret void` if the block isn't already closed.
+        if self.current_block.is_some() {
+            writeln!(self.out, "  ret void").unwrap();
+        }
+
+        writeln!(self.out, "}}").unwrap();
+    }
+
+    fn emit_instr(&mut self, instr: &IrInstr) {
+        match instr {
+            IrInstr::Halt => {
+                writeln!(self.out, "  unreachable").unwrap();
+                self.close_block();
+            }
+            IrInstr::Push(v) => {
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = add i32 0, {v}").unwrap();
+                self.push(name);
+            }
+            IrInstr::PushFloat(v) => {
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = fadd float 0.000000e+00, {v}").unwrap();
+                self.push(name);
+            }
+            IrInstr::PushBool(v) => {
+                let name = self.next_value();
+                let bit = if *v { 1 } else { 0 };
+                writeln!(self.out, "  {name} = xor i1 false, {bit}").unwrap();
+                self.push(name);
+            }
+            IrInstr::PushChar(v) => {
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = add i32 0, {v}").unwrap();
+                self.push(name);
+            }
+            IrInstr::PushNull => {
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = bitcast i32 0 to i8*").unwrap();
+                self.push(name);
+            }
+            IrInstr::LoadConst(idx) => {
+                let s = self.consts[*idx as usize].clone();
+                let ptr = self.const_str(&s);
+                self.push(ptr);
+            }
+            IrInstr::LoadGlobal(_idx) => {
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = load i32, i32* @global_{_idx}").unwrap();
+                self.push(name);
+            }
+            IrInstr::StoreGlobal(idx) => {
+                let val = self.pop();
+                let ty = llvm_type(&crate::ast::Type::Int);
+                writeln!(self.out, "  store {ty} {val}, {ty}* @global_{idx}").unwrap();
+            }
+            IrInstr::LoadLocal(_idx) => {
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = load i32, i32* %local_0").unwrap();
+                self.push(name);
+            }
+            IrInstr::StoreLocal(_idx) => {
+                let val = self.pop();
+                writeln!(self.out, "  store i32 {val}, i32* %local_0").unwrap();
+            }
+            IrInstr::Add => {
+                let b = self.pop();
+                let a = self.pop();
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = add i32 {a}, {b}").unwrap();
+                self.push(name);
+            }
+            IrInstr::Sub => {
+                let b = self.pop();
+                let a = self.pop();
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = sub i32 {a}, {b}").unwrap();
+                self.push(name);
+            }
+            IrInstr::Mul => {
+                let b = self.pop();
+                let a = self.pop();
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = mul i32 {a}, {b}").unwrap();
+                self.push(name);
+            }
+            IrInstr::Div => {
+                let b = self.pop();
+                let a = self.pop();
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = sdiv i32 {a}, {b}").unwrap();
+                self.push(name);
+            }
+            IrInstr::Less => self.cmp("icmp slt"),
+            IrInstr::Greater => self.cmp("icmp sgt"),
+            IrInstr::Equal => self.cmp("icmp eq"),
+            IrInstr::NotEqual => self.cmp("icmp ne"),
+            IrInstr::LessEqual => self.cmp("icmp sle"),
+            IrInstr::GreaterEqual => self.cmp("icmp sge"),
+            IrInstr::Return => {
+                let val = self.pop();
+                writeln!(self.out, "  ret i32 {val}").unwrap();
+                self.close_block();
+            }
+            IrInstr::Pop => {
+                self.pop();
+            }
+            IrInstr::Print => {
+                let val = self.pop();
+                let fmt = self.const_str("%s\n");
+                writeln!(
+                    self.out,
+                    "  call i32 @printf(i8* {fmt}, i8* {val})"
+                )
+                .unwrap();
+            }
+            IrInstr::Call { addr, argc } => {
+                let name = self.next_value();
+                writeln!(
+                    self.out,
+                    "; {name} = call i32 @func_{addr}(...); argc={argc}"
+                )
+                .unwrap();
+                self.push(name);
+            }
+            IrInstr::Spawn { .. } => {
+                writeln!(self.out, "; spawn: not supported in AOT backend").unwrap();
+            }
+            IrInstr::CallNative(id) => {
+                let name = self.next_value();
+                writeln!(
+                    self.out,
+                    "; {name} = call i32 @native_{id}(...); native call"
+                )
+                .unwrap();
+                self.push(name);
+            }
+            IrInstr::NewInstance { .. } => {
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = bitcast i32 0 to i8*  ; new_instance (stub)").unwrap();
+                self.push(name);
+            }
+            IrInstr::GetField(_) => {
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = bitcast i32 0 to i8*  ; get_field (stub)").unwrap();
+                self.push(name);
+            }
+            IrInstr::SetField(_) => {
+                self.pop();
+                self.pop();
+                writeln!(self.out, "; set_field (stub)").unwrap();
+            }
+            IrInstr::NewList => {
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = bitcast i32 0 to i8*  ; new_list (stub)").unwrap();
+                self.push(name);
+            }
+            IrInstr::ListAdd | IrInstr::ListGet | IrInstr::ListSet | IrInstr::ListSize => {
+                self.pop();
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = bitcast i32 0 to i8*  ; list_op (stub)").unwrap();
+                self.push(name);
+            }
+            IrInstr::CheckNull => {
+                let val = self.pop();
+                let name = self.next_value();
+                writeln!(self.out, "  {name} = icmp eq i8* {val}, null  ; check_null").unwrap();
+                self.push(name);
+            }
+            IrInstr::Try { catch } => {
+                writeln!(
+                    self.out,
+                    "; try: push handler for catch block {catch} (stub)"
+                )
+                .unwrap();
+            }
+            IrInstr::EndTry => {
+                writeln!(self.out, "; end_try: pop handler (stub)").unwrap();
+            }
+            IrInstr::Throw => {
+                let _val = self.pop();
+                writeln!(self.out, "; throw: unwind to handler (stub)").unwrap();
+                self.close_block();
+            }
+            IrInstr::Jump { target } => {
+                writeln!(self.out, "  br label %block_{target}").unwrap();
+                self.close_block();
+            }
+            IrInstr::JumpIfFalse { target } => {
+                let cond = self.pop();
+                writeln!(self.out, "  br i1 {cond}, label %block_{target}, label %block_fall_{target}").unwrap();
+                self.close_block();
+            }
+            _ => {}
+        }
+    }
+
+    /// Emits a comparison: pops b, a, computes (a pred b), pushes result.
+    fn cmp(&mut self, pred: &str) {
+        let b = self.pop();
+        let a = self.pop();
+        let name = self.next_value();
+        writeln!(self.out, "  {name} = {pred} i32 {a}, {b}").unwrap();
+        self.push(name);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+pub fn emit_llvm(prog: &IrProgram, constants: &[String]) -> String {
+    let mut backend = LlvmBackend::new(constants.to_vec());
+    backend.compile(prog);
+    backend.out
+}

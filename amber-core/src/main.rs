@@ -108,24 +108,71 @@ fn resolve_and_load(
     }
 }
 
+/// Compiles a single `.amb` file (plus its transitive imports) into `.amc`
+/// bytecode bytes. Returns the bytecode and the list of loaded module paths.
+fn compile_file(
+    path: &Path,
+    no_opt: bool,
+) -> Result<(Vec<u8>, Vec<PathBuf>), ErrorList> {
+    let mut all_errors = ErrorList::new();
+    let mut symbols = SymbolTable::new();
+    symbols.init_native_registry();
+    let mut ordered_paths: Vec<PathBuf> = Vec::new();
+    let mut ast: Vec<Stmt> = Vec::new();
+    collect_module(path, &mut symbols, &mut ordered_paths, &mut ast, &mut all_errors);
+
+    if all_errors.has_errors() {
+        return Err(all_errors);
+    }
+
+    // Local optimization pass over the merged AST (skipped with --no-opt).
+    let ast = if no_opt { ast } else { optimizer::fold_program(ast) };
+
+    // Emit the merged AST.
+    let mut emit_errors = ErrorList::new();
+    let mut emitter = Emitter::new();
+    for stmt in ast {
+        emitter.emit_stmt(&stmt, &mut symbols, &mut emit_errors);
+    }
+    emitter.emit_byte(OpCode::Halt.into());
+    emitter.finalize(&symbols, &mut emit_errors); // Patch function calls
+
+    if emit_errors.has_errors() {
+        return Err(emit_errors);
+    }
+
+    Ok((emitter.code.clone(), ordered_paths))
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: ambc <file.amb>");
+        eprintln!("Usage: ambc <file.amb> [--module mod.amb]... [--archive out.ama] [--resource name=path]... [--emit-ir] [--emit-llvm] [--no-opt]");
         process::exit(1);
     }
 
     let filename = &args[1];
 
     // Parse optional flags after the source file:
-    //   ambc <file.amb> [--archive out.ama] [--resource name=path]... [--emit-ir] [--no-opt]
+    //   ambc <file.amb> [--module mod.amb]... [--archive out.ama]
+    //       [--resource name=path]... [--emit-ir] [--emit-llvm] [--no-opt]
     let mut archive_out: Option<String> = None;
     let mut resources: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut extra_modules: Vec<String> = Vec::new();
     let mut emit_ir = false;
+    let mut emit_llvm = false;
     let mut no_opt = false;
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
+            "--module" => {
+                if i + 1 >= args.len() {
+                    eprintln!("Error: --module requires a file path");
+                    process::exit(1);
+                }
+                extra_modules.push(args[i + 1].clone());
+                i += 2;
+            }
             "--archive" => {
                 if i + 1 >= args.len() {
                     eprintln!("Error: --archive requires an output path");
@@ -160,6 +207,10 @@ fn main() {
                 emit_ir = true;
                 i += 1;
             }
+            "--emit-llvm" => {
+                emit_llvm = true;
+                i += 1;
+            }
             "--no-opt" => {
                 no_opt = true;
                 i += 1;
@@ -173,50 +224,60 @@ fn main() {
 
     let main_path = Path::new(filename);
 
-    // Parse and load the main module plus all transitive imports.
-    let mut all_errors = ErrorList::new();
-    let mut symbols = SymbolTable::new();
-    symbols.init_native_registry();
-    let mut ordered_paths: Vec<PathBuf> = Vec::new();
-    let mut ast: Vec<Stmt> = Vec::new();
-    collect_module(main_path, &mut symbols, &mut ordered_paths, &mut ast, &mut all_errors);
-
-    if all_errors.has_errors() {
-        eprint!("{}", all_errors);
-        process::exit(1);
-    }
-
-    // Local optimization pass over the merged AST (skipped with --no-opt).
-    let ast = if no_opt { ast } else { optimizer::fold_program(ast) };
-
-    // Emit the merged AST (dependencies first, then the main module).
-    let mut emit_errors = ErrorList::new();
-    let mut emitter = Emitter::new();
-    for stmt in ast {
-        emitter.emit_stmt(&stmt, &mut symbols, &mut emit_errors);
-    }
-    emitter.emit_byte(OpCode::Halt.into());
-    emitter.finalize(&symbols, &mut emit_errors); // Patch function calls
-
-    if emit_errors.has_errors() {
-        eprint!("{}", emit_errors);
-        process::exit(1);
-    }
+    // Compile the main module.
+    let (main_bytecode, main_modules) = match compile_file(main_path, no_opt) {
+        Ok(result) => result,
+        Err(errs) => {
+            eprint!("{}", errs);
+            process::exit(1);
+        }
+    };
 
     let output_path = filename.replace(".amb", ".amc");
-    emitter.write_file(&output_path).expect("Failed to write file");
-    println!("Amberlink: Compiled {} ({} modules) to {}", filename, ordered_paths.len(), output_path);
+    fs::write(&output_path, &main_bytecode).expect("Failed to write file");
+    println!(
+        "Amberlink: Compiled {} ({} modules) to {}",
+        filename,
+        main_modules.len(),
+        output_path
+    );
+
+    // Compile extra --module files into separate .amc entries.
+    let mut module_entries: Vec<(String, Vec<u8>)> =
+        vec![(codegen::archive::MAIN_ENTRY.to_string(), main_bytecode)];
+    for mod_path_str in &extra_modules {
+        let mod_path = Path::new(mod_path_str);
+        let (mod_bytecode, _) = match compile_file(mod_path, no_opt) {
+            Ok(result) => result,
+            Err(errs) => {
+                eprint!("{}", errs);
+                process::exit(1);
+            }
+        };
+        let entry_name = mod_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("module")
+            .to_string();
+        let entry_len = mod_bytecode.len();
+        module_entries.push((entry_name, mod_bytecode));
+        println!(
+            "Amberlink: Compiled module {} ({} bytes) for archive",
+            mod_path_str,
+            entry_len
+        );
+    }
 
     // If requested, dump the backend IR and verify the decode/re-encode round-trip.
     if emit_ir {
-        match codegen::ir::decode(&emitter.code) {
+        match codegen::ir::decode(&module_entries[0].1) {
             Ok(prog) => {
                 let back = codegen::ir::encode(&prog);
-                if back != emitter.code {
+                if back != module_entries[0].1 {
                     eprintln!("Error: IR round-trip mismatch (decoder drift)");
                     process::exit(1);
                 }
-                print!("{}", codegen::ir::format_program(&prog, &emitter.constants));
+                print!("{}", codegen::ir::format_program(&prog, &[]));
             }
             Err(e) => {
                 eprintln!("Error: could not decode IR: {}", e);
@@ -225,12 +286,30 @@ fn main() {
         }
     }
 
-    // If requested, wrap the compiled program plus bundled resources in a .ama archive.
+    // If requested, emit LLVM IR for the compiled program (textual IR; no LLVM install needed).
+    if emit_llvm {
+        match codegen::ir::decode(&module_entries[0].1) {
+            Ok(prog) => {
+                println!("{}", codegen::llvm_backend::emit_llvm(&prog, &[]));
+            }
+            Err(e) => {
+                eprintln!("Error: could not decode IR for LLVM emission: {}", e);
+                process::exit(1);
+            }
+        }
+    }
+
+    // If requested, wrap the compiled modules plus bundled resources in a .ama archive.
     if let Some(archive_path) = archive_out {
+        let module_count = module_entries.len();
         let resource_count = resources.len();
-        let bytecode = emitter.to_bytes();
-        let ama = codegen::archive::build_archive(bytecode, resources);
-        fs::write(&archive_path, ama).expect("Failed to write archive");
-        println!("Amberlink: Wrote archive {} ({} resources)", archive_path, resource_count);
+        let ama = codegen::archive::build_archive(module_entries, resources);
+        fs::write(&archive_path, &ama).expect("Failed to write archive");
+        println!(
+            "Amberlink: Wrote archive {} ({} modules, {} resources)",
+            archive_path,
+            module_count,
+            resource_count
+        );
     }
 }
