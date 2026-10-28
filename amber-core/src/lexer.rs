@@ -76,6 +76,13 @@ pub struct SpannedToken {
     pub column: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct SpannedToken {
+    pub token: Token,
+    pub line: usize,
+    pub column: usize,
+}
+
 pub struct Lexer {
     input: Vec<char>,
     pos: usize,
