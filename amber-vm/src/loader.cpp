@@ -166,31 +166,6 @@ namespace Loader {
                 case OP_HALT: case OP_NEW_ARRAY: case OP_STORE_ARRAY: case OP_LOAD_ARRAY: case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_LESS: case OP_GREATER: case OP_EQUAL: case OP_NOT_EQUAL: case OP_LESS_EQUAL: case OP_GREATER_EQUAL: case OP_RETURN: case OP_NEW_LIST: case OP_LIST_ADD: case OP_LIST_GET: case OP_LIST_SET: case OP_LIST_SIZE: case OP_PUSH_NULL: case OP_CHECK_NULL: case OP_END_TRY: case OP_THROW: case OP_POP: case OP_PRINT: break;
                 default: std::cerr<<"Error: Unknown opcode in module '"<<m.name<<"'."<<std::endl;return false;
             }
-            uint32_t dataLen = r.u32();
-
-            if (name == "main") {
-                // The main entry is an embedded .amc program. Parse it bounded
-                // to exactly its entry bytes so a lying length can't over-read
-                // into neighboring entries.
-                if (static_cast<size_t>(dataLen) > r.size - r.pos) {
-                    std::cerr << "Error: Truncated 'main' entry in archive." << std::endl;
-                    return false;
-                }
-                Reader sub(r.data + r.pos, dataLen);
-                if (!parse_amc(sub, bytecode, constants)) {
-                    std::cerr << "Error: Failed to parse 'main' entry in archive." << std::endl;
-                    return false;
-                }
-                foundMain = true;
-                r.pos += dataLen;
-            } else {
-                std::string content;
-                if (!r.readString(content, dataLen)) {
-                    std::cerr << "Error: Truncated archive entry." << std::endl;
-                    return false;
-                }
-                Resources::loaded[name] = content;
-            }
         }
         bytecode.insert(bytecode.end(),m.code.begin(),m.code.end());
         globalBase+=moduleGlobalCount;
