@@ -147,3 +147,16 @@ On the Ryzen 7 5800X / Windows 10 IoT Enterprise LTSC 2021 system, a 31-pair run
 | strcat | 90.682 ms | 94.683 ms | 1.0060 (+0.60%) | 83.553-129.720 / 84.045-106.979 ms |
 
 All workload outputs matched. The observed ranges overlap for every workload, and the process-inclusive measurements contain substantial noise. Computed-goto has a small median advantage in this run, most visible in the loop workload, but the evidence does not establish a large or universal dispatch bottleneck. Keep computed-goto as the GCC/Clang default and retain switch dispatch as the portable fallback; do not make a dispatch rewrite based on this result alone.
+
+## AVM heap collection and thread roots
+
+An audit found that `Heap::register_object` counted allocations toward `gc_threshold`, but the interpreter only called `collect()` from string concatenation. Programs allocating arrays, instances, or collections without concatenating strings could therefore grow the heap without triggering collection. A second correctness issue was that collection scanned only the currently executing thread's stack, even though the VM shares one heap across spawned threads. A collection in one worker could reclaim an object still held only by another worker's stack.
+
+The interpreter now checks the adaptive collection threshold after heap-object creation (`NEW_ARRAY`, `NEW_INSTANCE`, `NEW_LIST`, and allocating native calls), after pushing the new value onto the current stack. String concatenation remains a safe point. Collection scans every active interpreter stack, globals, spawn arguments waiting for a worker to start, and completed worker results. Stack registration and root handoff are serialized by the existing GIL. Pending spawn roots are removed once the worker's stack has been registered; completed results remain rooted while thread handles can still be joined repeatedly.
+
+Two regression workloads cover both sides of the thread-root handoff:
+
+- `examples/gc_thread_roots_test.amb`: a worker holds an instance on its active stack while the main thread allocates enough arrays to trigger collection. Before the fix, the final field access failed with `Reference is not an instance`; after the fix it returns `42`.
+- `examples/gc_thread_pending_roots_test.amb`: the main thread allocates enough arrays immediately after spawning, while the worker is still waiting for the GIL. The worker subsequently accesses its argument successfully and returns `42`.
+
+Both workloads run in the normal regression harness. They passed with computed-goto and forced-switch dispatch. The full regression suite and 15-sample AVM/Native parity suite also passed. This change addresses collection correctness and trigger coverage; it is not presented as a measured performance improvement.

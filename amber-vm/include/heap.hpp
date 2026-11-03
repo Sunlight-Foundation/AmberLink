@@ -77,17 +77,19 @@ class Heap {
 public:
     std::vector<AmberObject*> objects; // Public for direct access by VM
     std::vector<size_t> free_slots;    // Indices of freed objects (holes)
-    // Allocation-triggered GC policy: collect() is a no-op until enough new
-    // objects were registered since the last collection. After each real
-    // collection the threshold adapts to 2x live objects (min 1024), so GC
-    // cost stays amortized even when call sites (e.g. string concat) ask often.
+    // Allocation-triggered GC policy: safe points check collect() after enough
+    // objects were registered since the last collection. The threshold adapts
+    // to 2x live objects (min 1024), amortizing mark-and-sweep cost.
+
     size_t allocated_since_gc = 0;
     size_t gc_threshold = 1024;
     size_t live_objects = 0;
     ~Heap();
     int32_t register_object(AmberObject* obj);
     void mark(AmberObject* obj, size_t constant_pool_size);
-    void collect(const std::vector<Value>& stack, const std::vector<Value>& globals, size_t constant_pool_size);
+    void collect(const std::vector<std::vector<Value>*>& stacks, const std::vector<Value>& globals,
+                 const std::vector<Value>& pending_thread_roots, const std::vector<Value>& thread_roots,
+                 size_t constant_pool_size);
     void sweep();
 };
 

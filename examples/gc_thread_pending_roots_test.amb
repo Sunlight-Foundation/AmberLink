@@ -1,0 +1,14 @@
+class Box {
+    int value
+}
+int worker(Box p) {
+    p.value = 42
+    return p.value
+}
+var handle = spawn worker(new Box())
+int i = 0
+while i < 2000 {
+    new int[10]
+    i = i + 1
+}
+print join(handle)
