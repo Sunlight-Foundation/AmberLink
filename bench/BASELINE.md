@@ -70,6 +70,16 @@ The updated Native ranges were 10.170–13.590 ms for fib, 53.370–58.291 ms fo
 
 These are workload-specific observations, not universal performance guarantees or new regression budgets.
 
+## Phase 2 optimization check: AVM instance-field access
+
+An opt-in opcode counter (`AVM_PROFILE=ON`) was added for profiling builds. It has no counter increments or output in normal builds. The counter output was verified under both dispatch implementations, and a forced switch-dispatch Release build matched computed-goto output across all 27 example regression programs. See [AVM-PROFILING.md](AVM-PROFILING.md) for the build and usage instructions.
+
+Dynamic counts from the 10M loop show that global/stack traffic dominates that workload: 40,000,003 `LOAD_GLOBAL`, 20,000,003 `STORE_GLOBAL`, 20,000,003 `PUSH`, 20,000,000 `ADD`, 10,000,000 `JUMP`, 10,000,001 `JUMP_IF_FALSE`, and 10,000,001 `LESS` executions. The 2M method-call workload executes 2,000,000 each of `CALL`, `RETURN`, `GET_FIELD`, and `SET_FIELD`, plus 6,000,000 `LOAD_LOCAL` operations.
+
+The measured method hot path was `GET_FIELD` / `SET_FIELD`: both dispatch implementations previously used RTTI `dynamic_cast` for every instance field read/write. They now validate the heap object's existing `ObjType::INSTANCE` tag and use `static_cast`, preserving the same type-mismatch error while avoiding RTTI on this hot path. Array and list casts were deliberately left unchanged because the measured workloads did not establish them as bottlenecks.
+
+For a 31-pair alternating A/B run against an unmodified `beta_development` worktree, the 2M method benchmark measured 114.083 ms before and 104.848 ms after (median of paired ratios: -10.5%; individual ranges: 105.769–136.730 ms before, 95.870–125.998 ms after). The unchanged loop control also shifted from 331.102 ms to 314.031 ms (-5.2%) in that run, indicating material run-to-run variation; the ranges overlap, so do not attribute the full difference to this change. Treat it as an encouraging workload-specific signal rather than a universal or guaranteed speedup. The interpreter change does not alter the bytecode format or Amber semantics.
+
 ## Coverage and limitations
 
 - The AVM-only suite covers recursion, loops, GC pressure, linked lists, hash maps, method calls, and string concatenation.
