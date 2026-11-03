@@ -107,3 +107,23 @@ A 31-pair alternating A/B run compared the merged pre-change revision (`d89a404`
 The ranges overlap and the run contains substantial timing outliers. Treat the paired result as an encouraging, workload-specific signal rather than a guaranteed general speedup. A separate 31-pair `fib` run also improved by 6.46%; that workload uses `ADD` too, so it is corroborating evidence, not an unaffected control.
 
 The global opcodes remain frequent in the loop (`LOAD_GLOBAL` 40,000,003 and `STORE_GLOBAL` 20,000,003 in the current profile), but this change deliberately leaves their implementation alone: frequency alone does not establish that changing global access would improve execution. Further global-slot work should be based on an isolated measurement.
+
+## AVM global-slot versus local-slot experiment
+
+To separate global-slot traffic from other work in the 10M integer loop, two AVM-focused programs perform the same loop and produce the same result (`10000000`):
+
+- [`avm-global-loop.amb`](avm-global-loop.amb) keeps the loop variables in module globals.
+- [`avm-local-loop.amb`](avm-local-loop.amb) passes the loop variables as function parameters, so the compiler uses local slots.
+
+Opcode profiling confirms that the loop body is otherwise matched: both execute 20,000,000 `ADD`, 10,000,001 `LESS`, 10,000,000 `JUMP`, and 10,000,001 `JUMP_IF_FALSE` operations. The global version executes 40,000,002 `LOAD_GLOBAL` and 20,000,002 `STORE_GLOBAL`; the local version replaces those with the same counts of `LOAD_LOCAL` and `STORE_LOCAL`. The local version additionally has one `CALL` and one `RETURN`.
+
+A 31-pair alternating process-time comparison on the merged runtime measured:
+
+| Measurement | Global slots | Local slots |
+|---|---:|---:|
+| Median process time | 340.983 ms | 337.804 ms |
+| Observed range | 335.410-365.747 ms | 333.634-366.508 ms |
+
+The median paired global/local ratio was 1.0090 (global 0.90% slower). The ranges overlap substantially, and the difference is small relative to normal timing variation. This is not strong enough evidence to justify changing global storage or removing runtime bounds handling. The local variant also includes a function call/return, so this is a practical slot-access comparison rather than a perfectly isolated instruction microbenchmark.
+
+**Conclusion:** global slot access may carry a small overhead relative to local slots, but the current evidence does not justify a speculative runtime or bytecode change. Keep the explicit global load bounds check and current module relocation behavior. Revisit only with a tighter isolated benchmark or stronger repeatable signal.
