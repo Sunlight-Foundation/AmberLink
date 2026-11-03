@@ -1,0 +1,9 @@
+// Shared AVM/Native benchmark: repeated string concatenation.
+// Timing is measured by tools/bench-parity.ps1, outside the program.
+String s = ""
+int i = 0
+while i < 20000 {
+    s = s + "x"
+    i = i + 1
+}
+print s
