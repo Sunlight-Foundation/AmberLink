@@ -44,22 +44,24 @@ VM        := $(BIN_DIR)/avm$(EXE)
 # Rust binary name differs by platform
 RUST_BIN  := $(CORE_DIR)/target/release/amber-core$(EXE)
 
-.PHONY: init build run clean new test bench watch
+.PHONY: init build run clean new test bench watch FORCE
 
 init: $(COMPILER) $(VM)
 
-$(COMPILER):
+$(COMPILER): FORCE
 	@echo "Compiling Rust Core..."
 	cd $(CORE_DIR) && cargo build --release
 	$(call MKDIR,$(BIN_DIR))
 	$(call COPY,$(RUST_BIN),$(COMPILER))
 
-$(VM):
+$(VM): FORCE
 	@echo "Compiling C++ VM..."
 	$(call MKDIR,$(BUILD_DIR))
-	cd $(BUILD_DIR) && cmake .. && cmake --build . --config Release
+	cd $(BUILD_DIR) && cmake .. -DCMAKE_BUILD_TYPE=Release && cmake --build . --config Release
 	$(call MKDIR,$(BIN_DIR))
 	$(call COPY,$(BUILD_DIR)/avm$(EXE),$(VM))
+
+FORCE:
 
 build: $(COMPILER)
 ifndef file
@@ -91,7 +93,7 @@ endif
 
 # Full regression suite (compiles + runs every example)
 test: $(COMPILER) $(VM)
-ifdef IS_CMD
+ifeq ($(OS),Windows_NT)
 	@powershell -NoProfile -ExecutionPolicy Bypass -File tools/test.ps1
 else
 	@bash tools/test.sh
@@ -99,7 +101,7 @@ endif
 
 # Run benchmarks (each bench prints its result + elapsed seconds)
 bench: $(COMPILER) $(VM)
-ifdef IS_CMD
+ifeq ($(OS),Windows_NT)
 	@powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench.ps1
 else
 	@bash tools/bench.sh
@@ -110,7 +112,7 @@ watch: $(COMPILER) $(VM)
 ifndef file
 	$(error Usage: make watch file=main.amb)
 endif
-ifdef IS_CMD
+ifeq ($(OS),Windows_NT)
 	@powershell -NoProfile -ExecutionPolicy Bypass -File tools/watch.ps1 -file "$(file)"
 else
 	@bash tools/watch.sh "$(file)"

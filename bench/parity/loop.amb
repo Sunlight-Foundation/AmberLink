@@ -1,0 +1,9 @@
+// Shared AVM/Native benchmark: integer arithmetic and loop dispatch.
+// Timing is measured by tools/bench-parity.ps1, outside the program.
+int s = 0
+int i = 0
+while i < 10000000 {
+    s = s + i
+    i = i + 1
+}
+print i
