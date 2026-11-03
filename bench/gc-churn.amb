@@ -1,0 +1,7 @@
+// Allocation churn: short-lived arrays are replaced and reclaimed by the AVM GC.
+int i = 0
+while i < 100000 {
+    new int[10]
+    i = i + 1
+}
+print i

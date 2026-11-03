@@ -372,8 +372,7 @@ static void map_rebuild_index(HashMapObject* hm) {
 // --- mapNew() : HashMap ---
 static Value native_mapNew(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
     (void)args; (void)constants;
-    HashMapObject* hm = new HashMapObject();
-    return Value::make_obj(heap.register_object(hm));
+    return Value::make_obj(heap.create_object<HashMapObject>());
 }
 
 // --- mapPut(map, key, value) : void ---
@@ -444,8 +443,7 @@ static Value native_mapSize(std::vector<Value>& args, std::vector<std::string>& 
 // --- llNew() : LinkedList ---
 static Value native_llNew(std::vector<Value>& args, std::vector<std::string>& constants, Heap& heap) {
     (void)args; (void)constants;
-    LinkedListObject* ll = new LinkedListObject();
-    return Value::make_obj(heap.register_object(ll));
+    return Value::make_obj(heap.create_object<LinkedListObject>());
 }
 
 // --- llAddFirst(ll, value) : void ---

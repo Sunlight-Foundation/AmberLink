@@ -22,6 +22,11 @@ if(AVM_PROFILE)
     target_compile_definitions(avm PRIVATE AVM_PROFILE)
 endif()
 
+option(AVM_GC_PROFILE "Collect AVM heap allocation and garbage-collection metrics" OFF)
+if(AVM_GC_PROFILE)
+    target_compile_definitions(avm PRIVATE AVM_GC_PROFILE)
+endif()
+
 option(AVM_FORCE_SWITCH "Force portable switch dispatch (testing)" OFF)
 if(AVM_FORCE_SWITCH)
     target_compile_definitions(avm PRIVATE AVM_FORCE_SWITCH)

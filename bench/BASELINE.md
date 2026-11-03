@@ -160,3 +160,12 @@ Two regression workloads cover both sides of the thread-root handoff:
 - `examples/gc_thread_pending_roots_test.amb`: the main thread allocates enough arrays immediately after spawning, while the worker is still waiting for the GIL. The worker subsequently accesses its argument successfully and returns `42`.
 
 Both workloads run in the normal regression harness. They passed with computed-goto and forced-switch dispatch. The full regression suite and 15-sample AVM/Native parity suite also passed. This change addresses collection correctness and trigger coverage; it is not presented as a measured performance improvement.
+
+
+## AVM heap and garbage-collection profiling
+
+An opt-in `AVM_GC_PROFILE=ON` build now reports heap allocation counts, sampled object-construction/registration and collection-threshold costs, collection counts, mark/reset/sweep phase timings, root/edge traversal counts, reclaimed objects, and heap table occupancy. Allocation and threshold-check timings are sampled once per 1,024 operations to limit profiling overhead. See [GC-PROFILING.md](GC-PROFILING.md) for build instructions and workload definitions.
+
+Four focused workloads separate allocation without collection (`gc-allocation`), short-lived allocation churn (`gc-churn`), sweeping after a large graph becomes unreachable (`gc-sweep`), and tracing a large retained graph (`gc`). On the Ryzen 7 5800X Windows host, the diagnostic profiles show that sweep dominates churn and large-dead-heap workloads, while mark traversal dominates the retained-graph workload. In the 100,000-array churn case, 97 collections reclaimed 99,327 objects; cumulative sweep time was 3.663 ms versus 5.4 ?s of mark time. In the retained 20,000-instance graph, mark time was 68.8 ?s of 104.2 ?s total collection time. These are single-run phase diagnostics, not performance budgets.
+
+The current evidence points to heap slot-table traversal (reset/sweep) as the next optimization candidate, but does not yet justify changing the collector or heap representation. The profiling option is disabled in normal builds.

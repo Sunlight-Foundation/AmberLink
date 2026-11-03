@@ -1,0 +1,19 @@
+// Grow a live object graph, drop its only root, then force a full sweep.
+class Node {
+    int value
+}
+List keep = new List()
+int i = 0
+while i < 20000 {
+    var node = new Node()
+    node.value = i
+    keep.add(node)
+    i = i + 1
+}
+keep = new List()
+int j = 0
+while j < 50000 {
+    new int[10]
+    j = j + 1
+}
+print j
