@@ -10,8 +10,25 @@ Heap::~Heap() {
     std::cerr << "[AVM GC] allocations=" << profile.allocations
               << " object_creation_sample_ns=" << profile.object_creation_ns
               << " object_creation_samples=" << profile.object_creation_samples
+              << " object_construct_sample_ns=" << profile.object_construct_ns
+              << " object_construct_samples=" << profile.object_construct_samples
               << " register_sample_ns=" << profile.register_ns
               << " register_samples=" << profile.register_samples
+              << " register_reuse_sample_ns=" << profile.register_reuse_ns
+              << " register_append_sample_ns=" << profile.register_append_ns
+              << " allocations_string=" << profile.allocations_by_type[0]
+              << " allocations_array=" << profile.allocations_by_type[1]
+              << " allocations_instance=" << profile.allocations_by_type[2]
+              << " allocations_list=" << profile.allocations_by_type[3]
+              << " allocations_hash_map=" << profile.allocations_by_type[4]
+              << " allocations_linked_list=" << profile.allocations_by_type[5]
+              << " reused_slots=" << profile.reused_slots
+              << " appended_slots=" << profile.appended_slots
+              << " object_table_growths=" << profile.object_table_growths
+              << " object_table_growth_ns=" << profile.object_table_growth_ns
+              << " free_slot_growths=" << profile.free_slot_growths
+              << " free_slot_growth_ns=" << profile.free_slot_growth_ns
+              << " free_slots_high_water=" << profile.free_slots_high_water
               << " collection_checks=" << profile.collection_checks
               << " threshold_check_sample_ns=" << profile.threshold_check_ns
               << " threshold_check_samples=" << profile.threshold_check_samples
@@ -28,7 +45,12 @@ Heap::~Heap() {
               << " reclaimed_objects=" << profile.reclaimed_objects
               << " last_gc_live_objects=" << live_objects
               << " heap_objects_at_exit=" << std::count_if(objects.begin(), objects.end(), [](const AmberObject* obj) { return obj != nullptr; })
-              << " heap_slots=" << objects.size() << std::endl;
+              << " heap_slots=" << objects.size()
+              << " heap_slot_capacity=" << objects.capacity()
+              << " heap_slot_storage_bytes=" << objects.capacity() * sizeof(AmberObject*)
+              << " free_slot_capacity=" << free_slots.capacity()
+              << " free_slot_storage_bytes=" << free_slots.capacity() * sizeof(size_t)
+              << std::endl;
 #endif
     for (AmberObject* obj : objects) {
         if (obj) delete obj;
@@ -43,28 +65,48 @@ int32_t Heap::register_object(AmberObject* obj) {
     ++profile.allocations;
 #endif
     ++allocated_since_gc;
+#ifdef AVM_GC_PROFILE
+    ++profile.allocations_by_type[static_cast<size_t>(obj->type)];
+#endif
     if (!free_slots.empty()) {
         size_t idx = free_slots.back();
         free_slots.pop_back();
         objects[idx] = obj;
+#ifdef AVM_GC_PROFILE
+        ++profile.reused_slots;
+#endif
         // std::cout << "[GC] Reusing slot " << idx << std::endl;
 #ifdef AVM_GC_PROFILE
         if (sample) {
             const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - profile_start).count();
             profile.register_ns += static_cast<uint64_t>(elapsed);
+            profile.register_reuse_ns += static_cast<uint64_t>(elapsed);
             ++profile.register_samples;
         }
 #endif
         return static_cast<int32_t>(idx);
     } else {
+#ifdef AVM_GC_PROFILE
+        ++profile.appended_slots;
+        const bool grows = objects.size() == objects.capacity();
+        const auto growth_start = grows ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
         objects.push_back(obj);
+#ifdef AVM_GC_PROFILE
+        if (grows) {
+            ++profile.object_table_growths;
+            profile.object_table_growth_ns += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - growth_start).count());
+        }
+#endif
         // std::cout << "[GC] Allocating new slot " << (objects.size() - 1) << std::endl;
 #ifdef AVM_GC_PROFILE
         if (sample) {
             const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - profile_start).count();
             profile.register_ns += static_cast<uint64_t>(elapsed);
+            profile.register_append_ns += static_cast<uint64_t>(elapsed);
             ++profile.register_samples;
         }
 #endif
@@ -280,7 +322,19 @@ void Heap::sweep() {
 #endif
                 delete obj;
                 objects[i] = nullptr;
+#ifdef AVM_GC_PROFILE
+                const bool grows = free_slots.size() == free_slots.capacity();
+                const auto growth_start = grows ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
                 free_slots.push_back(i);
+#ifdef AVM_GC_PROFILE
+                if (grows) {
+                    ++profile.free_slot_growths;
+                    profile.free_slot_growth_ns += static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::chrono::steady_clock::now() - growth_start).count());
+                }
+                profile.free_slots_high_water = std::max<uint64_t>(profile.free_slots_high_water, free_slots.size());
+#endif
             } else {
                 ++live_objects;
             }
