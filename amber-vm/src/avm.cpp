@@ -92,6 +92,13 @@ static void thread_entry(VMContext* vm, int32_t addr, std::vector<Value> args,
     slot->finished = true;
 }
 
+// Replace two stack operands with one result without shrinking and re-growing
+// the vector. The caller must have checked that at least two values are present.
+static inline void replace_binary_stack_pair(std::vector<Value>& stack, Value result) {
+    stack[stack.size() - 2] = result;
+    stack.pop_back();
+}
+
 // The interpreter loop, shared by the main thread and (in a later slice)
 // spawned threads. Per-thread state (stacks, ip) is local; VMContext holds
 // what threads share. is_main/out_result are dormant until OP_SPAWN lands;
@@ -309,13 +316,14 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
         }
         lbl_OP_ADD: {
             if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during ADD.");
-            Value b = vm_stack.back(); vm_stack.pop_back();
-            Value a = vm_stack.back(); vm_stack.pop_back();
+            const Value b = vm_stack.back();
+            const Value a = vm_stack[vm_stack.size() - 2];
             if (a.type == ValueType::INT && b.type == ValueType::INT) {
-                vm_stack.push_back(Value(a.as.i + b.as.i));
+                replace_binary_stack_pair(vm_stack, Value(a.as.i + b.as.i));
             } else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) {
-                vm_stack.push_back(Value(a.as.f + b.as.f));
+                replace_binary_stack_pair(vm_stack, Value(a.as.f + b.as.f));
             } else if (a.type == ValueType::STRING_CONST && b.type == ValueType::STRING_CONST) {
+                vm_stack.pop_back(); vm_stack.pop_back();
                 constants.push_back(constants[a.as.str_idx] + constants[b.as.str_idx]);
                 gc.collect(vm_stack, globals, constants.size());
                 vm_stack.push_back(Value::make_string(constants.size() - 1));
@@ -356,11 +364,11 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
         }
         lbl_OP_LESS: {
             if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LESS.");
-            Value b = vm_stack.back(); vm_stack.pop_back();
-            Value a = vm_stack.back(); vm_stack.pop_back();
-            if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i < b.as.i));
-            else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f < b.as.f));
-            else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c < b.as.c));
+            const Value b = vm_stack.back();
+            const Value a = vm_stack[vm_stack.size() - 2];
+            if (a.type == ValueType::INT && b.type == ValueType::INT) replace_binary_stack_pair(vm_stack, Value(a.as.i < b.as.i));
+            else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) replace_binary_stack_pair(vm_stack, Value(a.as.f < b.as.f));
+            else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) replace_binary_stack_pair(vm_stack, Value(a.as.c < b.as.c));
             else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with LESS.");
             DISPATCH();
         }
@@ -726,11 +734,12 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                 }
                 case OP_ADD: {
                     if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during ADD.");
-                    Value b = vm_stack.back(); vm_stack.pop_back();
-                    Value a = vm_stack.back(); vm_stack.pop_back();
-                    if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i + b.as.i));
-                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f + b.as.f));
+                    const Value b = vm_stack.back();
+                    const Value a = vm_stack[vm_stack.size() - 2];
+                    if (a.type == ValueType::INT && b.type == ValueType::INT) replace_binary_stack_pair(vm_stack, Value(a.as.i + b.as.i));
+                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) replace_binary_stack_pair(vm_stack, Value(a.as.f + b.as.f));
                     else if (a.type == ValueType::STRING_CONST && b.type == ValueType::STRING_CONST) {
+                        vm_stack.pop_back(); vm_stack.pop_back();
                         constants.push_back(constants[a.as.str_idx] + constants[b.as.str_idx]);
                         gc.collect(vm_stack, globals, constants.size());
                         vm_stack.push_back(Value::make_string(constants.size() - 1));
@@ -769,11 +778,11 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                 }
                 case OP_LESS: {
                     if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LESS.");
-                    Value b = vm_stack.back(); vm_stack.pop_back();
-                    Value a = vm_stack.back(); vm_stack.pop_back();
-                    if (a.type == ValueType::INT && b.type == ValueType::INT) vm_stack.push_back(Value(a.as.i < b.as.i));
-                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) vm_stack.push_back(Value(a.as.f < b.as.f));
-                    else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) vm_stack.push_back(Value(a.as.c < b.as.c));
+                    const Value b = vm_stack.back();
+                    const Value a = vm_stack[vm_stack.size() - 2];
+                    if (a.type == ValueType::INT && b.type == ValueType::INT) replace_binary_stack_pair(vm_stack, Value(a.as.i < b.as.i));
+                    else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) replace_binary_stack_pair(vm_stack, Value(a.as.f < b.as.f));
+                    else if (a.type == ValueType::CHAR && b.type == ValueType::CHAR) replace_binary_stack_pair(vm_stack, Value(a.as.c < b.as.c));
                     else throw std::runtime_error("Type mismatch: Cannot compare incompatible types with LESS.");
                     break;
                 }
