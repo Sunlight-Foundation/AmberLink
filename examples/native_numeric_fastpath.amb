@@ -1,0 +1,36 @@
+// Exercises Native numeric fast paths and tagged-value fallback operations.
+int a = 17
+int b = 5
+print a + b
+print a - b
+print a * b
+print a / b
+print a < b
+print a >= b
+
+// INT32_MIN / -1 is defined to wrap to INT32_MIN on both targets.
+int minimum = 0 - 2147483647 - 1
+int minus_one = 0 - 1
+print minimum / minus_one
+
+float x = 7.5
+float y = 2.5
+print x + y
+print x - y
+print x * y
+print x / y
+print x > y
+print x != y
+
+char first = 'A'
+char second = 'B'
+print first < second
+
+bool yes = true
+bool no = false
+print yes != no
+
+String prefix = "Amber"
+String suffix = "link"
+print prefix + suffix
+print prefix == suffix

@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <cstdint>
 #include <cstring> // For std::memcpy
+#include <limits>
 
 // Threaded dispatch via computed gotos (GCC/Clang only).
 // MSVC does not support computed gotos — falls back to switch.
@@ -33,6 +34,16 @@ static void print_value(const Value& val, std::vector<std::string>& constants) {
     } else {
         std::cout << val << std::endl;
     }
+}
+
+// Avoid signed-division UB for INT32_MIN / -1. The Native runtime defines
+// this edge case as INT32_MIN, so keep the AVM behavior aligned.
+static int32_t divide_int32(int32_t lhs, int32_t rhs) {
+    if (rhs == 0) throw std::runtime_error("Division by zero.");
+    if (lhs == std::numeric_limits<int32_t>::min() && rhs == -1) {
+        return std::numeric_limits<int32_t>::min();
+    }
+    return lhs / rhs;
 }
 
 int execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& constants) {
@@ -317,8 +328,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             Value b = vm_stack.back(); vm_stack.pop_back();
             Value a = vm_stack.back(); vm_stack.pop_back();
             if (a.type == ValueType::INT && b.type == ValueType::INT) {
-                if (b.as.i == 0) throw std::runtime_error("Division by zero.");
-                vm_stack.push_back(Value(a.as.i / b.as.i));
+                vm_stack.push_back(Value(divide_int32(a.as.i, b.as.i)));
             } else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) {
                 if (b.as.f == 0.0f) throw std::runtime_error("Division by zero.");
                 vm_stack.push_back(Value(a.as.f / b.as.f));
@@ -720,8 +730,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     Value b = vm_stack.back(); vm_stack.pop_back();
                     Value a = vm_stack.back(); vm_stack.pop_back();
                     if (a.type == ValueType::INT && b.type == ValueType::INT) {
-                        if (b.as.i == 0) throw std::runtime_error("Division by zero.");
-                        vm_stack.push_back(Value(a.as.i / b.as.i));
+                        vm_stack.push_back(Value(divide_int32(a.as.i, b.as.i)));
                     } else if (a.type == ValueType::FLOAT && b.type == ValueType::FLOAT) {
                         if (b.as.f == 0.0f) throw std::runtime_error("Division by zero.");
                         vm_stack.push_back(Value(a.as.f / b.as.f));

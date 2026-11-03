@@ -56,6 +56,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench-parity.ps1 -Samp
 
 The process-startup cost is material for the short Fibonacci workload. The string-concatenation ranges also show enough variance that the small median difference should not be treated as a meaningful regression or win. The loop workload is currently the clearest Native advantage in this small shared subset. These results are not a claim of overall target superiority.
 
+## Phase 2 optimization check: Native numeric fast paths
+
+Compared the unmodified `beta_development` worktree with the LLVM numeric fast-path change on the same machine. Both runs used 30 samples per target after one warm-up, included process startup/shutdown, redirected standard output, and excluded compilation. The AVM was unchanged during these measurements and is included as a control; the separate AVM integer-division edge-case guard added afterward does not affect these workloads.
+
+| Workload | AVM before (ms) | AVM after (ms) | Native before (ms) | Native after (ms) | Native median change |
+|---|---:|---:|---:|---:|---:|
+| fib - recursive fib(25) | 19.346 | 19.349 | 12.517 | 11.027 | -11.9% |
+| loop - 10M integer iterations | 335.134 | 336.292 | 103.654 | 54.394 | -47.5% |
+| strcat - 20k concatenations | 101.555 | 100.838 | 110.019 | 108.381 | -1.5% |
+
+The updated Native ranges were 10.170–13.590 ms for fib, 53.370–58.291 ms for loop, and 91.531–143.495 ms for strcat. The original Native ranges were 11.617–14.932 ms, 100.792–113.084 ms, and 94.564–122.408 ms respectively. The loop improvement is clear and repeatable: the common integer arithmetic and comparisons now lower directly to LLVM instructions rather than making an out-of-line C runtime call for each operation. Fibonacci also improved, while the string workload continues through the runtime fallback and is effectively unchanged within its measurement variability. AVM timings remained stable as expected because this change does not modify the AVM.
+
+These are workload-specific observations, not universal performance guarantees or new regression budgets.
+
 ## Coverage and limitations
 
 - The AVM-only suite covers recursion, loops, GC pressure, linked lists, hash maps, method calls, and string concatenation.
