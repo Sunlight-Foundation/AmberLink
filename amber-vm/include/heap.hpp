@@ -84,8 +84,20 @@ public:
         uint64_t allocations = 0;
         uint64_t object_creation_ns = 0;
         uint64_t object_creation_samples = 0;
+        uint64_t object_construct_ns = 0;
+        uint64_t object_construct_samples = 0;
         uint64_t register_ns = 0;
         uint64_t register_samples = 0;
+        uint64_t register_reuse_ns = 0;
+        uint64_t register_append_ns = 0;
+        uint64_t allocations_by_type[6] = {};
+        uint64_t reused_slots = 0;
+        uint64_t appended_slots = 0;
+        uint64_t object_table_growths = 0;
+        uint64_t object_table_growth_ns = 0;
+        uint64_t free_slot_growths = 0;
+        uint64_t free_slot_growth_ns = 0;
+        uint64_t free_slots_high_water = 0;
         uint64_t collection_checks = 0;
         uint64_t threshold_check_ns = 0;
         uint64_t threshold_check_samples = 0;
@@ -121,6 +133,14 @@ public:
         const auto start = sample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 #endif
         T* obj = new T(std::forward<Args>(args)...);
+#ifdef AVM_GC_PROFILE
+        if (sample) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - start).count();
+            profile.object_construct_ns += static_cast<uint64_t>(elapsed);
+            ++profile.object_construct_samples;
+        }
+#endif
         const int32_t handle = register_object(obj);
 #ifdef AVM_GC_PROFILE
         if (sample) {

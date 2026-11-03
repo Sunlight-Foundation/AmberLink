@@ -16,9 +16,14 @@ bin/ambc.exe bench/gc-churn.amb
 
 The profile is emitted to standard error when the VM heap is destroyed. Useful fields:
 
-- `allocations`: objects registered with the heap.
-- `object_creation_sample_ns`: sampled end-to-end object construction plus heap registration time.
-- `register_sample_ns`: sampled time spent registering the object in the heap slot table; included in `object_creation_sample_ns`.
+- `allocations` and `allocations_<type>`: total registered objects and counts by object family (string, array, instance, list, hash map, linked list).
+- `object_construct_sample_ns`: sampled `new T(...)` time, including the object's constructor and any initial payload allocation.
+- `object_creation_sample_ns`: sampled end-to-end construction plus heap registration time; it includes both construction and registration samples.
+- `register_sample_ns`: sampled time spent registering an object in the heap slot table. `register_reuse_sample_ns` and `register_append_sample_ns` split those samples by whether a free handle was reused or the table was appended.
+- `reused_slots` and `appended_slots`: counts of handle reuse and new high-water slots.
+- `object_table_growths` / `object_table_growth_ns`: number and cumulative duration of `objects` vector capacity expansions.
+- `free_slot_growths` / `free_slot_growth_ns`: number and cumulative duration of `free_slots` vector capacity expansions; `free_slots_high_water` is its maximum occupancy.
+- `heap_slot_capacity`, `heap_slot_storage_bytes`, `free_slot_capacity`, and `free_slot_storage_bytes`: vector backing-store capacity at exit, not total process or object-payload memory.
 - `collection_checks`: calls to the collection safe-point gate.
 - `threshold_check_sample_ns`: sampled time for the cheap threshold check.
 - `collections`: full mark-and-sweep cycles actually run.
@@ -32,9 +37,34 @@ Allocation/registration and threshold-check timings are sampled once per 1,024 o
 ## Workloads
 
 - `bench/gc-allocation.amb`: 1,000 short-lived arrays, below the initial 1,024-object collection threshold. Isolates allocation and safe-point overhead without a full collection.
+- `bench/gc-mixed-allocation.amb`: retains 5,000 each of instances, arrays, hash maps, and linked lists (plus their containing list). Exercises the different object constructors and nested payload containers.
 - `bench/gc-churn.amb`: 100,000 short-lived arrays. Exercises repeated slot reuse and collections where almost all objects are garbage.
 - `bench/gc-sweep.amb`: builds a 20,000-node live graph, drops its only root, then allocates 50,000 arrays. Exercises sweeping a large heap table after a large object graph becomes unreachable.
 - `bench/gc.amb`: retains 20,000 instances through a list and then performs 20,000 string concatenations. Exercises tracing a large live graph.
+
+## Allocation and heap-management observations
+
+A Release profiling build on the Windows / Ryzen 7 5800X host produced these single-run structural measurements. Construction and registration timings are sampled; vector-growth timings are accumulated for every capacity expansion.
+
+| Workload | Allocations | Reused / appended handles | Object-table growths / time | Free-slot growths / time | Collections |
+|---|---:|---:|---:|---:|---:|
+| `gc-allocation` | 1,000 | 0 / 1,000 | 11 / 9.4 us | 0 / 0 us | 0 |
+| `gc-churn` | 100,000 | 98,975 / 1,025 | 12 / 12.4 us | 11 / 4.6 us | 97 |
+| `gc-sweep` | 70,002 | 42,354 / 27,648 | 16 / 81.2 us | 16 / 63.1 us | 45 |
+| `gc` | 20,001 | 0 / 20,001 | 16 / 94.9 us | 0 / 0 us | 3 |
+| `gc-mixed-allocation` | 20,001 | 0 / 20,001 | 16 / 83.6 us | 0 / 0 us | 3 |
+
+Key observations:
+
+- Churn reuses 98.98% of registrations after the initial heap growth. The stable handle table reaches 1,025 slots and does not grow with the full 100,000-allocation count.
+- The large dropped-graph workload reaches a 27,648-slot table and a 27,645-entry free-slot high-water mark. Both backing vectors reach capacity 32,768 (256 KiB each on this 64-bit host).
+- Across these workloads, the measured vector-capacity expansions are infrequent and their cumulative durations are small compared with the multi-millisecond collection cost in churn/sweep. The data does not justify replacing the current vectors or adding a more complex free-slot structure.
+- Retained-object profiles still spend more time marking than sweeping: the mixed workload recorded 251.3 us marking versus 34.4 us sweeping, with 53,227 object values scanned. This confirms that graph shape and payload density affect the collector's dominant phase.
+- The constructor sample measures `new T(...)` (including constructor-time payload initialization), but does not separately time later growth inside `List.add`, `mapPut`, or `llAddLast`. That is a distinct follow-up measurement if collection payload mutation becomes a suspected bottleneck.
+
+A 15-pair alternating process-time comparison of normal Release and profiling Release builds measured the profiling-build delta at -0.27% for `gc-churn`, +0.84% for `gc-sweep`, and +0.54% for `gc-mixed-allocation`. All ranges overlapped. These measurements include process-launch overhead and are only an instrumentation-overhead sanity check, not a speed comparison.
+
+**Current conclusion:** handle reuse is working effectively, and the two heap bookkeeping vectors are not currently a compelling optimization target. Keep the stable handle table and free-slot stack unchanged. If more allocation work is warranted, instrument dynamic payload-container growth (especially retained list/map workloads) before changing allocator or heap representation.
 
 ## Initial Windows / Ryzen 7 5800X profile
 

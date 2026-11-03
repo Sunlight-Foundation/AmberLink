@@ -1,0 +1,22 @@
+// Mixed allocation profile: exercise each heap object family and nested payload storage.
+class AllocationNode {
+    int value
+}
+
+List keep = new List()
+int i = 0
+while i < 5000 {
+    var node = new AllocationNode()
+    node.value = i
+    var array = new int[8]
+    var map = mapNew()
+    mapPut(map, i, node)
+    var queue = llNew()
+    llAddLast(queue, node)
+    keep.add(node)
+    keep.add(array)
+    keep.add(map)
+    keep.add(queue)
+    i = i + 1
+}
+print keep.size()
