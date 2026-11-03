@@ -7,9 +7,10 @@
 //
 // Value model
 //   Every Amberlink value is a tagged `%Value = { i32 tag, i32 bits }`, the same
-//   shape as the VM's Value. Operations that need type dispatch (add, compare,
-//   print, ...) call into `runtime/amb_rt.c`, which mirrors the VM's semantics
-//   and error messages exactly. Values are only ever passed by pointer.
+//   shape as the VM's Value. Common integer/float arithmetic and comparisons
+//   lower directly to LLVM instructions; uncommon tagged-value cases and
+//   operations such as printing use `runtime/amb_rt.c` for exact VM semantics
+//   and error messages. Values are only ever passed by pointer.
 //
 // Operand stack
 //   The VM's operand stack becomes a per-function `alloca` array. Stack depth is
@@ -118,19 +119,223 @@ impl<'a> Gen<'a> {
         true
     }
 
-    fn binary(&mut self, func: &str, cmp_op: Option<i32>) {
+    fn numeric_binary(&mut self, func: &str, int_op: &str, float_op: &str, division: bool) {
         if !self.need(2, func) {
             return;
         }
         let a = self.slot(self.depth - 2);
         let b = self.slot(self.depth - 1);
-        match cmp_op {
-            Some(op) => self.line(&format!(
-                "call void @{func}(ptr {a}, ptr {a}, ptr {b}, i32 {op})"
-            )),
-            None => self.line(&format!("call void @{func}(ptr {a}, ptr {a}, ptr {b})")),
+        let id = self.tmp + 1;
+        self.tmp = id;
+
+        let atp = self.t();
+        let btp = self.t();
+        let atag = self.t();
+        let btag = self.t();
+        let abp = self.t();
+        let bbp = self.t();
+        let abits = self.t();
+        let bbits = self.t();
+        let a_is_int = self.t();
+        let b_is_int = self.t();
+        let both_int = self.t();
+        self.line(&format!(
+            "{atp} = getelementptr %Value, ptr {a}, i32 0, i32 0"
+        ));
+        self.line(&format!(
+            "{btp} = getelementptr %Value, ptr {b}, i32 0, i32 0"
+        ));
+        self.line(&format!("{atag} = load i32, ptr {atp}"));
+        self.line(&format!("{btag} = load i32, ptr {btp}"));
+        self.line(&format!(
+            "{abp} = getelementptr %Value, ptr {a}, i32 0, i32 1"
+        ));
+        self.line(&format!(
+            "{bbp} = getelementptr %Value, ptr {b}, i32 0, i32 1"
+        ));
+        self.line(&format!("{abits} = load i32, ptr {abp}"));
+        self.line(&format!("{bbits} = load i32, ptr {bbp}"));
+        self.line(&format!("{a_is_int} = icmp eq i32 {atag}, {T_INT}"));
+        self.line(&format!("{b_is_int} = icmp eq i32 {btag}, {T_INT}"));
+        self.line(&format!("{both_int} = and i1 {a_is_int}, {b_is_int}"));
+        self.line(&format!(
+            "br i1 {both_int}, label %N{id}_int, label %N{id}_check_float"
+        ));
+
+        self.body.push_str(&format!("N{id}_int:\n"));
+        if division {
+            let zero = self.t();
+            let is_min = self.t();
+            let is_neg_one = self.t();
+            let overflow = self.t();
+            let slow = self.t();
+            self.line(&format!("{zero} = icmp eq i32 {bbits}, 0"));
+            self.line(&format!("{is_min} = icmp eq i32 {abits}, -2147483648"));
+            self.line(&format!("{is_neg_one} = icmp eq i32 {bbits}, -1"));
+            self.line(&format!("{overflow} = and i1 {is_min}, {is_neg_one}"));
+            self.line(&format!("{slow} = or i1 {zero}, {overflow}"));
+            self.line(&format!(
+                "br i1 {slow}, label %N{id}_fallback, label %N{id}_int_fast"
+            ));
+            self.body.push_str(&format!("N{id}_int_fast:\n"));
         }
+        let int_result = self.t();
+        self.line(&format!("{int_result} = {int_op} i32 {abits}, {bbits}"));
+        let int_out_tag = self.t();
+        let int_out_bits = self.t();
+        self.line(&format!(
+            "{int_out_tag} = getelementptr %Value, ptr {a}, i32 0, i32 0"
+        ));
+        self.line(&format!(
+            "{int_out_bits} = getelementptr %Value, ptr {a}, i32 0, i32 1"
+        ));
+        self.line(&format!("store i32 {T_INT}, ptr {int_out_tag}"));
+        self.line(&format!("store i32 {int_result}, ptr {int_out_bits}"));
+        self.line(&format!("br label %N{id}_done"));
+
+        self.body.push_str(&format!("N{id}_check_float:\n"));
+        let a_is_float = self.t();
+        let b_is_float = self.t();
+        let both_float = self.t();
+        self.line(&format!("{a_is_float} = icmp eq i32 {atag}, {T_FLOAT}"));
+        self.line(&format!("{b_is_float} = icmp eq i32 {btag}, {T_FLOAT}"));
+        self.line(&format!("{both_float} = and i1 {a_is_float}, {b_is_float}"));
+        self.line(&format!(
+            "br i1 {both_float}, label %N{id}_float, label %N{id}_fallback"
+        ));
+
+        self.body.push_str(&format!("N{id}_float:\n"));
+        let af = self.t();
+        let bf = self.t();
+        self.line(&format!("{af} = bitcast i32 {abits} to float"));
+        self.line(&format!("{bf} = bitcast i32 {bbits} to float"));
+        if division {
+            let zero = self.t();
+            self.line(&format!("{zero} = fcmp oeq float {bf}, 0.000000e+00"));
+            self.line(&format!(
+                "br i1 {zero}, label %N{id}_fallback, label %N{id}_float_fast"
+            ));
+            self.body.push_str(&format!("N{id}_float_fast:\n"));
+        }
+        let float_result = self.t();
+        let float_bits = self.t();
+        self.line(&format!("{float_result} = {float_op} float {af}, {bf}"));
+        self.line(&format!(
+            "{float_bits} = bitcast float {float_result} to i32"
+        ));
+        let float_out_tag = self.t();
+        let float_out_bits = self.t();
+        self.line(&format!(
+            "{float_out_tag} = getelementptr %Value, ptr {a}, i32 0, i32 0"
+        ));
+        self.line(&format!(
+            "{float_out_bits} = getelementptr %Value, ptr {a}, i32 0, i32 1"
+        ));
+        self.line(&format!("store i32 {T_FLOAT}, ptr {float_out_tag}"));
+        self.line(&format!("store i32 {float_bits}, ptr {float_out_bits}"));
+        self.line(&format!("br label %N{id}_done"));
+
+        self.body.push_str(&format!("N{id}_fallback:\n"));
+        self.line(&format!("call void @{func}(ptr {a}, ptr {a}, ptr {b})"));
+        self.line(&format!("br label %N{id}_done"));
+        self.body.push_str(&format!("N{id}_done:\n"));
         self.depth -= 1;
+    }
+
+    fn compare_fast(&mut self, op: i32, int_pred: &str, float_pred: &str) {
+        if !self.need(2, "compare") {
+            return;
+        }
+        let a = self.slot(self.depth - 2);
+        let b = self.slot(self.depth - 1);
+        let id = self.tmp + 1;
+        self.tmp = id;
+
+        let atp = self.t();
+        let btp = self.t();
+        let atag = self.t();
+        let btag = self.t();
+        let abp = self.t();
+        let bbp = self.t();
+        let abits = self.t();
+        let bbits = self.t();
+        let a_is_int = self.t();
+        let b_is_int = self.t();
+        let both_int = self.t();
+        self.line(&format!(
+            "{atp} = getelementptr %Value, ptr {a}, i32 0, i32 0"
+        ));
+        self.line(&format!(
+            "{btp} = getelementptr %Value, ptr {b}, i32 0, i32 0"
+        ));
+        self.line(&format!("{atag} = load i32, ptr {atp}"));
+        self.line(&format!("{btag} = load i32, ptr {btp}"));
+        self.line(&format!(
+            "{abp} = getelementptr %Value, ptr {a}, i32 0, i32 1"
+        ));
+        self.line(&format!(
+            "{bbp} = getelementptr %Value, ptr {b}, i32 0, i32 1"
+        ));
+        self.line(&format!("{abits} = load i32, ptr {abp}"));
+        self.line(&format!("{bbits} = load i32, ptr {bbp}"));
+        self.line(&format!("{a_is_int} = icmp eq i32 {atag}, {T_INT}"));
+        self.line(&format!("{b_is_int} = icmp eq i32 {btag}, {T_INT}"));
+        self.line(&format!("{both_int} = and i1 {a_is_int}, {b_is_int}"));
+        self.line(&format!(
+            "br i1 {both_int}, label %C{id}_int, label %C{id}_check_float"
+        ));
+
+        self.body.push_str(&format!("C{id}_int:\n"));
+        let int_cmp = self.t();
+        let int_bits = self.t();
+        self.line(&format!("{int_cmp} = icmp {int_pred} i32 {abits}, {bbits}"));
+        self.line(&format!("{int_bits} = zext i1 {int_cmp} to i32"));
+        self.store_bool_result(&a, &int_bits);
+        self.line(&format!("br label %C{id}_done"));
+
+        self.body.push_str(&format!("C{id}_check_float:\n"));
+        let a_is_float = self.t();
+        let b_is_float = self.t();
+        let both_float = self.t();
+        self.line(&format!("{a_is_float} = icmp eq i32 {atag}, {T_FLOAT}"));
+        self.line(&format!("{b_is_float} = icmp eq i32 {btag}, {T_FLOAT}"));
+        self.line(&format!("{both_float} = and i1 {a_is_float}, {b_is_float}"));
+        self.line(&format!(
+            "br i1 {both_float}, label %C{id}_float, label %C{id}_fallback"
+        ));
+
+        self.body.push_str(&format!("C{id}_float:\n"));
+        let af = self.t();
+        let bf = self.t();
+        let float_cmp = self.t();
+        let float_bits = self.t();
+        self.line(&format!("{af} = bitcast i32 {abits} to float"));
+        self.line(&format!("{bf} = bitcast i32 {bbits} to float"));
+        self.line(&format!("{float_cmp} = fcmp {float_pred} float {af}, {bf}"));
+        self.line(&format!("{float_bits} = zext i1 {float_cmp} to i32"));
+        self.store_bool_result(&a, &float_bits);
+        self.line(&format!("br label %C{id}_done"));
+
+        self.body.push_str(&format!("C{id}_fallback:\n"));
+        self.line(&format!(
+            "call void @amb_cmp(ptr {a}, ptr {a}, ptr {b}, i32 {op})"
+        ));
+        self.line(&format!("br label %C{id}_done"));
+        self.body.push_str(&format!("C{id}_done:\n"));
+        self.depth -= 1;
+    }
+
+    fn store_bool_result(&mut self, slot: &str, bits: &str) {
+        let tag_ptr = self.t();
+        let bits_ptr = self.t();
+        self.line(&format!(
+            "{tag_ptr} = getelementptr %Value, ptr {slot}, i32 0, i32 0"
+        ));
+        self.line(&format!(
+            "{bits_ptr} = getelementptr %Value, ptr {slot}, i32 0, i32 1"
+        ));
+        self.line(&format!("store i32 {T_BOOL}, ptr {tag_ptr}"));
+        self.line(&format!("store i32 {bits}, ptr {bits_ptr}"));
     }
 
     fn jump_to(&mut self, target: usize) {
@@ -324,16 +529,16 @@ impl<'a> Gen<'a> {
                     self.depth = *i + 1;
                 }
             }
-            IrInstr::Add => self.binary("amb_add", None),
-            IrInstr::Sub => self.binary("amb_sub", None),
-            IrInstr::Mul => self.binary("amb_mul", None),
-            IrInstr::Div => self.binary("amb_div", None),
-            IrInstr::Less => self.binary("amb_cmp", Some(0)),
-            IrInstr::Greater => self.binary("amb_cmp", Some(1)),
-            IrInstr::Equal => self.binary("amb_cmp", Some(2)),
-            IrInstr::NotEqual => self.binary("amb_cmp", Some(3)),
-            IrInstr::LessEqual => self.binary("amb_cmp", Some(4)),
-            IrInstr::GreaterEqual => self.binary("amb_cmp", Some(5)),
+            IrInstr::Add => self.numeric_binary("amb_add", "add", "fadd", false),
+            IrInstr::Sub => self.numeric_binary("amb_sub", "sub", "fsub", false),
+            IrInstr::Mul => self.numeric_binary("amb_mul", "mul", "fmul", false),
+            IrInstr::Div => self.numeric_binary("amb_div", "sdiv", "fdiv", true),
+            IrInstr::Less => self.compare_fast(0, "slt", "olt"),
+            IrInstr::Greater => self.compare_fast(1, "sgt", "ogt"),
+            IrInstr::Equal => self.compare_fast(2, "eq", "oeq"),
+            IrInstr::NotEqual => self.compare_fast(3, "ne", "une"),
+            IrInstr::LessEqual => self.compare_fast(4, "sle", "ole"),
+            IrInstr::GreaterEqual => self.compare_fast(5, "sge", "oge"),
             IrInstr::Pop => {
                 if self.need(1, "pop") {
                     self.depth -= 1;
@@ -571,6 +776,55 @@ mod tests {
         assert!(llvm.contains("define i32 @main()"));
         assert!(llvm.contains("call void @amb_print"));
         assert!(llvm.contains("ret i32 0"));
+    }
+
+    #[test]
+    fn emits_numeric_fast_paths_and_preserves_runtime_fallbacks() {
+        let program = vec![
+            (0, IrInstr::Push(7)),
+            (5, IrInstr::Push(2)),
+            (10, IrInstr::Add),
+            (11, IrInstr::Print),
+            (12, IrInstr::PushFloat(3.5)),
+            (17, IrInstr::PushFloat(1.5)),
+            (22, IrInstr::Sub),
+            (23, IrInstr::Print),
+            (24, IrInstr::Push(6)),
+            (29, IrInstr::Push(2)),
+            (34, IrInstr::Div),
+            (35, IrInstr::Print),
+            (36, IrInstr::Push(3)),
+            (41, IrInstr::Push(4)),
+            (46, IrInstr::Less),
+            (47, IrInstr::Print),
+            (48, IrInstr::Halt),
+        ];
+        let llvm = emit_llvm(&program, &[]).expect("numeric operations should lower");
+
+        assert!(llvm.contains(" = add i32 "));
+        assert!(llvm.contains(" = fsub float "));
+        assert!(llvm.contains(" = sdiv i32 "));
+        assert!(llvm.contains(" = fdiv float "));
+        assert!(llvm.contains(" = icmp slt i32 "));
+        assert!(llvm.contains(" = fcmp olt float "));
+        assert!(llvm.contains("call void @amb_add"));
+        assert!(llvm.contains("call void @amb_sub"));
+        assert!(llvm.contains("call void @amb_div"));
+        assert!(llvm.contains("call void @amb_cmp"));
+        assert!(llvm.contains("icmp eq i32"));
+        assert!(llvm.contains("-2147483648"));
+    }
+
+    #[test]
+    fn floating_not_equal_uses_unordered_predicate_like_c_runtime() {
+        let program = vec![
+            (0, IrInstr::PushFloat(f32::NAN)),
+            (5, IrInstr::PushFloat(1.0)),
+            (10, IrInstr::NotEqual),
+            (11, IrInstr::Halt),
+        ];
+        let llvm = emit_llvm(&program, &[]).expect("float comparison should lower");
+        assert!(llvm.contains("fcmp une float"));
     }
 
     #[test]
