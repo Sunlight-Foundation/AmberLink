@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstring> // For std::memcpy
 #include <limits>
+#include <algorithm>
 
 // Threaded dispatch via computed gotos (GCC/Clang only).
 // MSVC does not support computed gotos — falls back to switch.
@@ -22,7 +23,8 @@
 #endif
 
 static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> args,
-                    bool is_main, Value& out_result, std::string& out_error);
+                    bool is_main, Value& out_result, std::string& out_error,
+                    const std::vector<Value>* pending_roots = nullptr);
 
 // Prints one value with the output lock held (threads share stdout).
 static void print_value(const Value& val, std::vector<std::string>& constants) {
@@ -36,6 +38,34 @@ static void print_value(const Value& val, std::vector<std::string>& constants) {
     }
 }
 
+// Registers a running interpreter stack as a GC root. The GIL serializes
+// registration, removal, and collection across all VM threads.
+class StackRootRegistration {
+    VMContext& vm;
+    std::vector<Value>* stack;
+public:
+    StackRootRegistration(VMContext& context, std::vector<Value>& values,
+                           const std::vector<Value>* pending_roots)
+        : vm(context), stack(&values) {
+        vm.active_stacks.push_back(stack);
+        if (pending_roots) {
+            for (const Value& root : *pending_roots) {
+                if (root.type != ValueType::OBJ_REF) continue;
+                auto it = std::find_if(vm.pending_thread_roots.begin(), vm.pending_thread_roots.end(),
+                    [&](const Value& candidate) {
+                        return candidate.type == ValueType::OBJ_REF && candidate.as.obj_ref == root.as.obj_ref;
+                    });
+                if (it != vm.pending_thread_roots.end()) vm.pending_thread_roots.erase(it);
+            }
+        }
+    }
+    ~StackRootRegistration() {
+        auto it = std::find(vm.active_stacks.begin(), vm.active_stacks.end(), stack);
+        if (it != vm.active_stacks.end()) vm.active_stacks.erase(it);
+    }
+    StackRootRegistration(const StackRootRegistration&) = delete;
+    StackRootRegistration& operator=(const StackRootRegistration&) = delete;
+};
 // Avoid signed-division UB for INT32_MIN / -1. The Native runtime defines
 // this edge case as INT32_MIN, so keep the AVM behavior aligned.
 static int32_t divide_int32(int32_t lhs, int32_t rhs) {
@@ -61,7 +91,7 @@ int execute(const std::vector<uint8_t>& bytecode, std::vector<std::string>& cons
     int rc;
     {
         GilHold hold;
-        rc = run_loop(vm, bytecode.data(), no_args, true, result, err);
+        rc = run_loop(vm, bytecode.data(), no_args, true, result, err, nullptr);
     }
     // Main invocation is done and the GIL is released: reap any threads the
     // program never joined (a live worker here blocks, like Java non-daemons).
@@ -77,7 +107,8 @@ static void thread_entry(VMContext* vm, int32_t addr, std::vector<Value> args,
     std::string err;
     int rc = 0;
     try {
-        rc = run_loop(*vm, vm->bytecode->data() + addr, std::move(args), false, result, err);
+        std::vector<Value> pending_roots = args;
+        rc = run_loop(*vm, vm->bytecode->data() + addr, std::move(args), false, result, err, &pending_roots);
     } catch (const std::exception& e) {
         err = e.what();
         rc = 1;
@@ -85,6 +116,7 @@ static void thread_entry(VMContext* vm, int32_t addr, std::vector<Value> args,
         err = "unknown thread error";
         rc = 1;
     }
+    if (result.type == ValueType::OBJ_REF) vm->thread_roots.push_back(result);
     std::lock_guard<std::mutex> lk(slot->m);
     slot->result = result;
     slot->error = err;
@@ -104,9 +136,11 @@ static inline void replace_binary_stack_pair(std::vector<Value>& stack, Value re
 // what threads share. is_main/out_result are dormant until OP_SPAWN lands;
 // they fix the call shape now so the next slice touches no signatures.
 static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> args,
-                    bool is_main, Value& out_result, std::string& out_error) {
+                    bool is_main, Value& out_result, std::string& out_error,
+                    const std::vector<Value>* pending_roots) {
     std::vector<Value> vm_stack(std::move(args));
     vm_stack.reserve(1024);
+    StackRootRegistration stack_roots(vm, vm_stack, pending_roots);
 
     Heap& gc = vm.heap;
     std::vector<Value>& globals = vm.globals;
@@ -129,6 +163,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
     // Reused across native calls (declared at function scope so computed-goto
     // dispatch never jumps across its construction/destruction).
     std::vector<Value> native_args;
+    StackRootRegistration native_arg_roots(vm, native_args, nullptr);
     // Reused scratch for OP_SPAWN, for the same reason.
     std::vector<Value> spawn_args;
     std::pair<int32_t, std::shared_ptr<ThreadSlot>> spawn_pair;
@@ -287,6 +322,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             if (size_val.type != ValueType::INT) throw std::runtime_error("Array size must be an integer.");
             ArrayObject* arr = new ArrayObject(size_val.as.i);
             vm_stack.push_back(Value::make_obj(gc.register_object(arr)));
+            gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size());
             DISPATCH();
         }
         lbl_OP_STORE_ARRAY: {
@@ -325,7 +361,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             } else if (a.type == ValueType::STRING_CONST && b.type == ValueType::STRING_CONST) {
                 vm_stack.pop_back(); vm_stack.pop_back();
                 constants.push_back(constants[a.as.str_idx] + constants[b.as.str_idx]);
-                gc.collect(vm_stack, globals, constants.size());
+                gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size());
                 vm_stack.push_back(Value::make_string(constants.size() - 1));
             } else {
                 throw std::runtime_error("Type mismatch: Cannot add incompatible types.");
@@ -431,6 +467,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             int32_t field_count; std::memcpy(&field_count, ip, 4); ip += 4;
             InstanceObject* obj = new InstanceObject(class_name_idx, field_count);
             vm_stack.push_back(Value::make_obj(gc.register_object(obj)));
+            gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size());
             DISPATCH();
         }
         lbl_OP_GET_FIELD: {
@@ -469,6 +506,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
         lbl_OP_NEW_LIST: {
             ListObject* list = new ListObject();
             vm_stack.push_back(Value::make_obj(gc.register_object(list)));
+            gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size());
             DISPATCH();
         }
         lbl_OP_LIST_ADD: {
@@ -561,6 +599,8 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             }
             Value result = entry.fn(native_args, constants, gc);
             vm_stack.push_back(result);
+            native_args.clear();
+            gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size());
             DISPATCH();
         }
         lbl_OP_SPAWN: {
@@ -570,6 +610,9 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             spawn_args.resize(arg_count);
             for (int i = arg_count - 1; i >= 0; --i) {
                 spawn_args[i] = vm_stack.back(); vm_stack.pop_back();
+            }
+            for (const Value& arg : spawn_args) {
+                if (arg.type == ValueType::OBJ_REF) vm.pending_thread_roots.push_back(arg);
             }
             spawn_pair = threads_alloc();
             spawn_pair.second->th = std::thread(thread_entry, &vm, target_offset,
@@ -707,7 +750,8 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     Value size_val = vm_stack.back(); vm_stack.pop_back();
                     if (size_val.type != ValueType::INT) throw std::runtime_error("Array size must be an integer.");
                     ArrayObject* arr = new ArrayObject(size_val.as.i);
-                    vm_stack.push_back(Value::make_obj(gc.register_object(arr))); break;
+                    vm_stack.push_back(Value::make_obj(gc.register_object(arr)));
+                    gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size()); break;
                 }
                 case OP_STORE_ARRAY: {
                     if (vm_stack.size() < 3) throw std::runtime_error("Stack underflow during STORE_ARRAY.");
@@ -741,7 +785,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     else if (a.type == ValueType::STRING_CONST && b.type == ValueType::STRING_CONST) {
                         vm_stack.pop_back(); vm_stack.pop_back();
                         constants.push_back(constants[a.as.str_idx] + constants[b.as.str_idx]);
-                        gc.collect(vm_stack, globals, constants.size());
+                        gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size());
                         vm_stack.push_back(Value::make_string(constants.size() - 1));
                     } else throw std::runtime_error("Type mismatch: Cannot add incompatible types.");
                     break;
@@ -844,7 +888,8 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     int32_t class_name_idx; std::memcpy(&class_name_idx, ip, 4); ip += 4;
                     int32_t field_count; std::memcpy(&field_count, ip, 4); ip += 4;
                     InstanceObject* obj = new InstanceObject(class_name_idx, field_count);
-                    vm_stack.push_back(Value::make_obj(gc.register_object(obj))); break;
+                    vm_stack.push_back(Value::make_obj(gc.register_object(obj)));
+                    gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size()); break;
                 }
                 case OP_GET_FIELD: {
                     int32_t field_idx; std::memcpy(&field_idx, ip, 4); ip += 4;
@@ -879,7 +924,8 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                 }
                 case OP_NEW_LIST: {
                     ListObject* list = new ListObject();
-                    vm_stack.push_back(Value::make_obj(gc.register_object(list))); break;
+                    vm_stack.push_back(Value::make_obj(gc.register_object(list)));
+                    gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size()); break;
                 }
                 case OP_LIST_ADD: {
                     if (vm_stack.size() < 2) throw std::runtime_error("Stack underflow during LIST_ADD.");
@@ -962,7 +1008,9 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                         native_args[i] = vm_stack.back(); vm_stack.pop_back();
                     }
                     Value result = entry.fn(native_args, constants, gc);
-                    vm_stack.push_back(result); break;
+                    vm_stack.push_back(result);
+                    native_args.clear();
+                    gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size()); break;
                 }
                 case OP_SPAWN: {
                     int32_t target_offset; std::memcpy(&target_offset, ip, 4); ip += 4;
@@ -971,6 +1019,9 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     spawn_args.resize(arg_count);
                     for (int i = arg_count - 1; i >= 0; --i) {
                         spawn_args[i] = vm_stack.back(); vm_stack.pop_back();
+                    }
+                    for (const Value& arg : spawn_args) {
+                        if (arg.type == ValueType::OBJ_REF) vm.pending_thread_roots.push_back(arg);
                     }
                     spawn_pair = threads_alloc();
                     spawn_pair.second->th = std::thread(thread_entry, &vm, target_offset,

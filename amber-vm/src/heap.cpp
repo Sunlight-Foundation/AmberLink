@@ -82,7 +82,9 @@ void Heap::mark(AmberObject* obj, size_t constant_pool_size) {
     }
 }
 
-void Heap::collect(const std::vector<Value>& stack, const std::vector<Value>& globals, size_t constant_pool_size) {
+void Heap::collect(const std::vector<std::vector<Value>*>& stacks, const std::vector<Value>& globals,
+                   const std::vector<Value>& pending_thread_roots, const std::vector<Value>& thread_roots,
+                   size_t constant_pool_size) {
     // Cheap gate: skip the full mark-and-sweep until enough garbage may exist.
     if (allocated_since_gc < gc_threshold) return;
     allocated_since_gc = 0;
@@ -92,12 +94,13 @@ void Heap::collect(const std::vector<Value>& stack, const std::vector<Value>& gl
         if (obj) obj->marked = false;
     }
 
-    // 2. Mark Roots (Stack)
-    for (const Value& val : stack) {
-        if (val.type == ValueType::OBJ_REF) {
-            size_t heap_idx = val.as.obj_ref;
-            if (heap_idx < objects.size()) {
-                mark(objects[heap_idx], constant_pool_size);
+    // 2. Mark Roots (all active interpreter stacks).
+    for (const std::vector<Value>* stack : stacks) {
+        if (!stack) continue;
+        for (const Value& val : *stack) {
+            if (val.type == ValueType::OBJ_REF) {
+                size_t heap_idx = val.as.obj_ref;
+                if (heap_idx < objects.size()) mark(objects[heap_idx], constant_pool_size);
             }
         }
     }
@@ -112,7 +115,23 @@ void Heap::collect(const std::vector<Value>& stack, const std::vector<Value>& gl
         }
     }
 
-    // 4. Sweep
+    // 4. Mark Roots (arguments waiting for a worker to start).
+    for (const Value& val : pending_thread_roots) {
+        if (val.type == ValueType::OBJ_REF) {
+            size_t heap_idx = val.as.obj_ref;
+            if (heap_idx < objects.size()) mark(objects[heap_idx], constant_pool_size);
+        }
+    }
+
+    // 5. Mark Roots (completed thread results).
+    for (const Value& val : thread_roots) {
+        if (val.type == ValueType::OBJ_REF) {
+            size_t heap_idx = val.as.obj_ref;
+            if (heap_idx < objects.size()) mark(objects[heap_idx], constant_pool_size);
+        }
+    }
+
+    // 6. Sweep
     sweep();
 }
 
