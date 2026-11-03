@@ -127,3 +127,23 @@ A 31-pair alternating process-time comparison on the merged runtime measured:
 The median paired global/local ratio was 1.0090 (global 0.90% slower). The ranges overlap substantially, and the difference is small relative to normal timing variation. This is not strong enough evidence to justify changing global storage or removing runtime bounds handling. The local variant also includes a function call/return, so this is a practical slot-access comparison rather than a perfectly isolated instruction microbenchmark.
 
 **Conclusion:** global slot access may carry a small overhead relative to local slots, but the current evidence does not justify a speculative runtime or bytecode change. Keep the explicit global load bounds check and current module relocation behavior. Revisit only with a tighter isolated benchmark or stronger repeatable signal.
+
+## AVM dispatch implementation comparison
+
+The AVM supports GCC/Clang computed-goto dispatch and a portable switch dispatcher. The latter is also used by MSVC and can be forced on GCC/Clang with `AVM_FORCE_SWITCH=ON`. To measure the difference without profiling overhead, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench-dispatch.ps1 -Samples 31
+```
+
+The script builds both implementations from the same source in separate Release directories, compiles the shared AVM/Native parity workloads to bytecode, verifies identical output, warms both executables, and alternates execution order for each paired sample. Timings include process startup and output redirection.
+
+On the Ryzen 7 5800X / Windows 10 IoT Enterprise LTSC 2021 system, a 31-pair run produced:
+
+| Workload | Computed-goto median | Switch median | Paired switch/computed ratio | Observed ranges (computed / switch) |
+|---|---:|---:|---:|---:|
+| fib | 20.000 ms | 20.268 ms | 1.0152 (+1.52%) | 18.253-31.402 / 18.156-77.977 ms |
+| loop | 319.387 ms | 330.226 ms | 1.0342 (+3.42%) | 306.024-354.819 / 314.851-415.185 ms |
+| strcat | 90.682 ms | 94.683 ms | 1.0060 (+0.60%) | 83.553-129.720 / 84.045-106.979 ms |
+
+All workload outputs matched. The observed ranges overlap for every workload, and the process-inclusive measurements contain substantial noise. Computed-goto has a small median advantage in this run, most visible in the loop workload, but the evidence does not establish a large or universal dispatch bottleneck. Keep computed-goto as the GCC/Clang default and retain switch dispatch as the portable fallback; do not make a dispatch rewrite based on this result alone.
