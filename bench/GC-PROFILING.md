@@ -22,8 +22,9 @@ The profile is emitted to standard error when the VM heap is destroyed. Useful f
 - `collection_checks`: calls to the collection safe-point gate.
 - `threshold_check_sample_ns`: sampled time for the cheap threshold check.
 - `collections`: full mark-and-sweep cycles actually run.
-- `reset_ns`, `mark_ns`, `sweep_ns`: cumulative time spent clearing mark bits, tracing roots/object references, and sweeping heap slots.
-- `reset_objects`, `root_values`, `marked_objects`, `object_slots_scanned`, `reclaimed_objects`: work counters across all collections.
+- `reset_ns`: cumulative time to advance the marking generation. It no longer clears every object's mark bit; a full reset occurs only if the 32-bit generation wraps.
+- `mark_ns`, `sweep_ns`: cumulative time spent tracing roots/object references and sweeping the stable heap-handle table.
+- `reset_objects`: objects reset only on generation wrap (normally zero); `root_values`, `marked_objects`, `object_slots_scanned`, `sweep_slots_scanned`, and `reclaimed_objects` describe work across all collections.
 - `heap_objects_at_exit` and `heap_slots`: occupied heap entries and the heap table's high-water size at process exit.
 
 Allocation/registration and threshold-check timings are sampled once per 1,024 operations to keep instrumentation overhead low. The object-creation sample includes the nested registration sample. GC phase timers run once per actual collection. Profiling still changes execution cost; use an ordinary Release VM for end-to-end performance comparisons.
