@@ -17,7 +17,7 @@
 // MSVC does not support computed gotos — falls back to switch.
 // Opcode enum values are sparse so we use a 256-entry table with a
 // catch-all default for unknown opcodes.
-#if defined(__GNUC__) || defined(__clang__)
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(AVM_FORCE_SWITCH)
     #define USE_COMPUTED_GOTO
 #endif
 
@@ -129,6 +129,18 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
     const uint8_t* ip = start_ip;
     const uint8_t* end = vm.bytecode->data() + vm.bytecode->size();
 
+#ifdef AVM_PROFILE
+    uint64_t opcode_counts[256] = {};
+    auto dump_opcode_profile = [&]() {
+        for (size_t opcode = 0; opcode < 256; ++opcode) {
+            if (opcode_counts[opcode] != 0) {
+                std::cerr << "AVM_OPCODE_COUNT " << opcode << " "
+                          << opcode_counts[opcode] << '\n';
+            }
+        }
+    };
+#endif
+
     try {
 #ifdef USE_COMPUTED_GOTO
         // 256-entry dispatch table — unused slots point to lbl_UNKNOWN.
@@ -183,10 +195,17 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             table_init = true;
         }
 
+#ifdef AVM_PROFILE
+        #define DISPATCH() if (ip < end) { ++opcode_counts[*ip]; goto *dispatch_table[*ip++]; } else goto lbl_OP_HALT
+#else
         #define DISPATCH() if (ip < end) goto *dispatch_table[*ip++]; else goto lbl_OP_HALT
+#endif
         DISPATCH();
 
         lbl_OP_HALT:
+#ifdef AVM_PROFILE
+            dump_opcode_profile();
+#endif
             return 0;
 
         lbl_OP_JUMP: {
@@ -414,8 +433,10 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                 throw std::runtime_error("Null pointer error: attempted to read a field on null.");
             }
             if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
-            InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[ref.as.obj_ref]);
-            if (!obj) throw std::runtime_error("Reference is not an instance.");
+            // Use the heap's explicit type tag instead of RTTI on this hot path.
+            AmberObject* object = gc.objects[ref.as.obj_ref];
+            if (!object || object->type != ObjType::INSTANCE) throw std::runtime_error("Reference is not an instance.");
+            InstanceObject* obj = static_cast<InstanceObject*>(object);
             if (field_idx < 0 || field_idx >= (int32_t)obj->fields.size()) throw std::runtime_error("Field index out of bounds.");
             vm_stack.push_back(obj->fields[field_idx]);
             DISPATCH();
@@ -429,8 +450,10 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                 throw std::runtime_error("Null pointer error: attempted to write a field on null.");
             }
             if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
-            InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[ref.as.obj_ref]);
-            if (!obj) throw std::runtime_error("Reference is not an instance.");
+            // Use the heap's explicit type tag instead of RTTI on this hot path.
+            AmberObject* object = gc.objects[ref.as.obj_ref];
+            if (!object || object->type != ObjType::INSTANCE) throw std::runtime_error("Reference is not an instance.");
+            InstanceObject* obj = static_cast<InstanceObject*>(object);
             if (field_idx < 0 || field_idx >= (int32_t)obj->fields.size()) throw std::runtime_error("Field index out of bounds.");
             obj->fields[field_idx] = val;
             DISPATCH();
@@ -608,8 +631,15 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
         // --- Fallback switch dispatch (MSVC) ---
         while (ip < end) {
             uint8_t instruction = *ip++;
+#ifdef AVM_PROFILE
+            ++opcode_counts[instruction];
+#endif
             switch (instruction) {
-                case OP_HALT: return 0;
+                case OP_HALT:
+#ifdef AVM_PROFILE
+                    dump_opcode_profile();
+#endif
+                    return 0;
                 case OP_JUMP: {
                     int32_t offset; std::memcpy(&offset, ip, 4); ip += 4; ip += offset; break;
                 }
@@ -815,8 +845,10 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                         throw std::runtime_error("Null pointer error: attempted to read a field on null.");
                     }
                     if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
-                    InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[ref.as.obj_ref]);
-                    if (!obj) throw std::runtime_error("Reference is not an instance.");
+                    // Use the heap's explicit type tag instead of RTTI on this hot path.
+                    AmberObject* object = gc.objects[ref.as.obj_ref];
+                    if (!object || object->type != ObjType::INSTANCE) throw std::runtime_error("Reference is not an instance.");
+                    InstanceObject* obj = static_cast<InstanceObject*>(object);
                     if (field_idx < 0 || field_idx >= (int32_t)obj->fields.size()) throw std::runtime_error("Field index out of bounds.");
                     vm_stack.push_back(obj->fields[field_idx]); break;
                 }
@@ -829,8 +861,10 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                         throw std::runtime_error("Null pointer error: attempted to write a field on null.");
                     }
                     if (ref.type != ValueType::OBJ_REF) throw std::runtime_error("Reference is not an object.");
-                    InstanceObject* obj = dynamic_cast<InstanceObject*>(gc.objects[ref.as.obj_ref]);
-                    if (!obj) throw std::runtime_error("Reference is not an instance.");
+                    // Use the heap's explicit type tag instead of RTTI on this hot path.
+                    AmberObject* object = gc.objects[ref.as.obj_ref];
+                    if (!object || object->type != ObjType::INSTANCE) throw std::runtime_error("Reference is not an instance.");
+                    InstanceObject* obj = static_cast<InstanceObject*>(object);
                     if (field_idx < 0 || field_idx >= (int32_t)obj->fields.size()) throw std::runtime_error("Field index out of bounds.");
                     obj->fields[field_idx] = val; break;
                 }
