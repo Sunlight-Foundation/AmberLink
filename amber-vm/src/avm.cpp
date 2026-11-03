@@ -320,8 +320,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             if (vm_stack.empty()) throw std::runtime_error("Stack underflow during NEW_ARRAY.");
             Value size_val = vm_stack.back(); vm_stack.pop_back();
             if (size_val.type != ValueType::INT) throw std::runtime_error("Array size must be an integer.");
-            ArrayObject* arr = new ArrayObject(size_val.as.i);
-            vm_stack.push_back(Value::make_obj(gc.register_object(arr)));
+            vm_stack.push_back(Value::make_obj(gc.create_object<ArrayObject>(size_val.as.i)));
             gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size());
             DISPATCH();
         }
@@ -465,8 +464,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
         lbl_OP_NEW_INSTANCE: {
             int32_t class_name_idx; std::memcpy(&class_name_idx, ip, 4); ip += 4;
             int32_t field_count; std::memcpy(&field_count, ip, 4); ip += 4;
-            InstanceObject* obj = new InstanceObject(class_name_idx, field_count);
-            vm_stack.push_back(Value::make_obj(gc.register_object(obj)));
+            vm_stack.push_back(Value::make_obj(gc.create_object<InstanceObject>(class_name_idx, field_count)));
             gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size());
             DISPATCH();
         }
@@ -504,8 +502,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
             DISPATCH();
         }
         lbl_OP_NEW_LIST: {
-            ListObject* list = new ListObject();
-            vm_stack.push_back(Value::make_obj(gc.register_object(list)));
+            vm_stack.push_back(Value::make_obj(gc.create_object<ListObject>()));
             gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size());
             DISPATCH();
         }
@@ -749,8 +746,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     if (vm_stack.empty()) throw std::runtime_error("Stack underflow during NEW_ARRAY.");
                     Value size_val = vm_stack.back(); vm_stack.pop_back();
                     if (size_val.type != ValueType::INT) throw std::runtime_error("Array size must be an integer.");
-                    ArrayObject* arr = new ArrayObject(size_val.as.i);
-                    vm_stack.push_back(Value::make_obj(gc.register_object(arr)));
+                    vm_stack.push_back(Value::make_obj(gc.create_object<ArrayObject>(size_val.as.i)));
                     gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size()); break;
                 }
                 case OP_STORE_ARRAY: {
@@ -887,8 +883,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                 case OP_NEW_INSTANCE: {
                     int32_t class_name_idx; std::memcpy(&class_name_idx, ip, 4); ip += 4;
                     int32_t field_count; std::memcpy(&field_count, ip, 4); ip += 4;
-                    InstanceObject* obj = new InstanceObject(class_name_idx, field_count);
-                    vm_stack.push_back(Value::make_obj(gc.register_object(obj)));
+                    vm_stack.push_back(Value::make_obj(gc.create_object<InstanceObject>(class_name_idx, field_count)));
                     gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size()); break;
                 }
                 case OP_GET_FIELD: {
@@ -923,8 +918,7 @@ static int run_loop(VMContext& vm, const uint8_t* start_ip, std::vector<Value> a
                     obj->fields[field_idx] = val; break;
                 }
                 case OP_NEW_LIST: {
-                    ListObject* list = new ListObject();
-                    vm_stack.push_back(Value::make_obj(gc.register_object(list)));
+                    vm_stack.push_back(Value::make_obj(gc.create_object<ListObject>()));
                     gc.collect(vm.active_stacks, globals, vm.pending_thread_roots, vm.thread_roots, constants.size()); break;
                 }
                 case OP_LIST_ADD: {

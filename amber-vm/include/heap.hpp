@@ -5,6 +5,10 @@
 #include <unordered_map>
 #include <cstdint>
 #include <cstddef>
+#include <utility>
+#ifdef AVM_GC_PROFILE
+#include <chrono>
+#endif
 #include "value.hpp"
 
 // Offset to distinguish Heap Objects from Constant Pool indices in negative handles
@@ -75,6 +79,28 @@ struct InstanceObject : AmberObject {
 
 class Heap {
 public:
+#ifdef AVM_GC_PROFILE
+    struct Profile {
+        uint64_t allocations = 0;
+        uint64_t object_creation_ns = 0;
+        uint64_t object_creation_samples = 0;
+        uint64_t register_ns = 0;
+        uint64_t register_samples = 0;
+        uint64_t collection_checks = 0;
+        uint64_t threshold_check_ns = 0;
+        uint64_t threshold_check_samples = 0;
+        uint64_t collections = 0;
+        uint64_t collection_ns = 0;
+        uint64_t reset_ns = 0;
+        uint64_t mark_ns = 0;
+        uint64_t sweep_ns = 0;
+        uint64_t reset_objects = 0;
+        uint64_t root_values = 0;
+        uint64_t marked_objects = 0;
+        uint64_t object_slots_scanned = 0;
+        uint64_t reclaimed_objects = 0;
+    } profile;
+#endif
     std::vector<AmberObject*> objects; // Public for direct access by VM
     std::vector<size_t> free_slots;    // Indices of freed objects (holes)
     // Allocation-triggered GC policy: safe points check collect() after enough
@@ -86,6 +112,24 @@ public:
     size_t live_objects = 0;
     ~Heap();
     int32_t register_object(AmberObject* obj);
+    template <typename T, typename... Args>
+    int32_t create_object(Args&&... args) {
+#ifdef AVM_GC_PROFILE
+        const bool sample = (profile.allocations & 1023u) == 0;
+        const auto start = sample ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+#endif
+        T* obj = new T(std::forward<Args>(args)...);
+        const int32_t handle = register_object(obj);
+#ifdef AVM_GC_PROFILE
+        if (sample) {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - start).count();
+            profile.object_creation_ns += static_cast<uint64_t>(elapsed);
+            ++profile.object_creation_samples;
+        }
+#endif
+        return handle;
+    }
     void mark(AmberObject* obj, size_t constant_pool_size);
     void collect(const std::vector<std::vector<Value>*>& stacks, const std::vector<Value>& globals,
                  const std::vector<Value>& pending_thread_roots, const std::vector<Value>& thread_roots,
