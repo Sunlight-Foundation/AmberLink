@@ -91,3 +91,19 @@ For a 31-pair alternating A/B run against an unmodified `beta_development` workt
 ## Historical note
 
 The previous baseline was v0.7 and used a different workload/measurement state. Do not compare its numbers directly with this v0.9 baseline as if they were measured under identical conditions.
+
+## AVM binary stack-result reuse experiment
+
+The AVM's profiled 10M loop executes 20M `ADD` operations and 10M `LESS` operations. Both previously removed two operands from the value stack and then pushed the result. The interpreter now writes the result into the lower operand slot and removes only the upper slot for the numeric `ADD` and `LESS` cases. String concatenation keeps its existing collection-safe path. Computed-goto and portable switch dispatch use the same behavior.
+
+A 31-pair alternating A/B run compared the merged pre-change revision (`d89a404`) with this change on `bench/parity/loop.amb`:
+
+| Measurement | Before | After |
+|---|---:|---:|
+| Median process time | 375.753 ms | 336.788 ms |
+| Median paired change | n/a | -11.38% |
+| Observed range | 352.727-547.078 ms | 305.246-534.360 ms |
+
+The ranges overlap and the run contains substantial timing outliers. Treat the paired result as an encouraging, workload-specific signal rather than a guaranteed general speedup. A separate 31-pair `fib` run also improved by 6.46%; that workload uses `ADD` too, so it is corroborating evidence, not an unaffected control.
+
+The global opcodes remain frequent in the loop (`LOAD_GLOBAL` 40,000,003 and `STORE_GLOBAL` 20,000,003 in the current profile), but this change deliberately leaves their implementation alone: frequency alone does not establish that changing global access would improve execution. Further global-slot work should be based on an isolated measurement.
