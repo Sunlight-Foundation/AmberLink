@@ -24,7 +24,7 @@ enum class ObjType {
 };
 
 struct AmberObject {
-    bool marked = false;
+    uint32_t mark_epoch = 0;
     ObjType type;
     virtual ~AmberObject() = default;
 };
@@ -95,14 +95,16 @@ public:
         uint64_t mark_ns = 0;
         uint64_t sweep_ns = 0;
         uint64_t reset_objects = 0;
+        uint64_t sweep_slots_scanned = 0;
         uint64_t root_values = 0;
         uint64_t marked_objects = 0;
         uint64_t object_slots_scanned = 0;
         uint64_t reclaimed_objects = 0;
     } profile;
 #endif
-    std::vector<AmberObject*> objects; // Public for direct access by VM
+    std::vector<AmberObject*> objects; // Stable handle table; slots are never compacted.
     std::vector<size_t> free_slots;    // Indices of freed objects (holes)
+    uint32_t mark_epoch = 0; // Generation used instead of clearing every object's mark bit.
     // Allocation-triggered GC policy: safe points check collect() after enough
     // objects were registered since the last collection. The threshold adapts
     // to 2x live objects (min 1024), amortizing mark-and-sweep cost.

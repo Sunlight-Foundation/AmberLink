@@ -1,0 +1,16 @@
+// A rooted object must keep its stable handle while dead heap slots are reused.
+class Box {
+    int value
+}
+var retained = new Box()
+retained.value = 73
+var roots = llNew()
+llAddLast(roots, retained)
+int i = 0
+while i < 5000 {
+    new int[16]
+    i = i + 1
+}
+var restored = llGet(roots, 0)
+print restored.value
+

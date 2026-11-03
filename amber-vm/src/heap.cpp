@@ -21,6 +21,7 @@ Heap::~Heap() {
               << " mark_ns=" << profile.mark_ns
               << " sweep_ns=" << profile.sweep_ns
               << " reset_objects=" << profile.reset_objects
+              << " sweep_slots_scanned=" << profile.sweep_slots_scanned
               << " root_values=" << profile.root_values
               << " marked_objects=" << profile.marked_objects
               << " object_slots_scanned=" << profile.object_slots_scanned
@@ -72,9 +73,9 @@ int32_t Heap::register_object(AmberObject* obj) {
 }
 
 void Heap::mark(AmberObject* obj, size_t constant_pool_size) {
-    if (obj == nullptr || obj->marked) return;
-    
-    obj->marked = true;
+    if (obj == nullptr || obj->mark_epoch == mark_epoch) return;
+
+    obj->mark_epoch = mark_epoch;
 #ifdef AVM_GC_PROFILE
     ++profile.marked_objects;
 #endif
@@ -180,14 +181,19 @@ void Heap::collect(const std::vector<std::vector<Value>*>& stacks, const std::ve
     auto phase_start = collection_start;
 #endif
 
-    // 1. Unmark all objects (Reset)
-    for (AmberObject* obj : objects) {
-        if (obj) {
+    // 1. Start a new marking generation. This avoids clearing a mark bit on
+    // every heap object before each collection. The full reset is only needed
+    // on the practically unreachable uint32_t wraparound path.
+    if (++mark_epoch == 0) {
+        for (AmberObject* obj : objects) {
+            if (obj) {
+                obj->mark_epoch = 0;
 #ifdef AVM_GC_PROFILE
-            ++profile.reset_objects;
+                ++profile.reset_objects;
 #endif
-            obj->marked = false;
+            }
         }
+        mark_epoch = 1;
     }
 #ifdef AVM_GC_PROFILE
     phase_start = std::chrono::steady_clock::now();
@@ -264,8 +270,11 @@ void Heap::sweep() {
     live_objects = 0;
     for (size_t i = 0; i < objects.size(); ++i) {
         AmberObject* obj = objects[i];
+#ifdef AVM_GC_PROFILE
+        ++profile.sweep_slots_scanned;
+#endif
         if (obj) {
-            if (!obj->marked) {
+            if (obj->mark_epoch != mark_epoch) {
 #ifdef AVM_GC_PROFILE
                 ++profile.reclaimed_objects;
 #endif
@@ -277,6 +286,7 @@ void Heap::sweep() {
             }
         }
     }
+
     // Adapt: next collection only after the heap could have doubled.
     size_t next = live_objects * 2;
     gc_threshold = next < 1024 ? 1024 : next;
